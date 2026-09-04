@@ -1,0 +1,8 @@
+default_config:
+
+biofects_butler:
+
+logger:
+  default: warning
+  logs:
+    custom_components.biofects_butler: debug

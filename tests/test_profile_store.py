@@ -1,0 +1,296 @@
+"""Tests for Home Assistant dashboard profile persistence."""
+
+from __future__ import annotations
+
+import asyncio
+import importlib
+import sys
+from types import ModuleType, SimpleNamespace
+
+import pytest
+
+
+class FakeStore:
+    """Capture Home Assistant storage reads and writes."""
+
+    loaded = None
+    saved = None
+    constructor_args = None
+    save_error = None
+
+    def __init__(self, hass, version, key) -> None:
+        type(self).constructor_args = (hass, version, key)
+
+    async def async_load(self):
+        return type(self).loaded
+
+    async def async_save(self, data) -> None:
+        if type(self).save_error is not None:
+            raise type(self).save_error
+        type(self).saved = data
+
+
+@pytest.fixture
+def store_module(websocket_modules, monkeypatch):
+    """Import the store against a compact HA Store implementation."""
+    storage = ModuleType("homeassistant.helpers.storage")
+    storage.Store = FakeStore
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.storage", storage)
+    FakeStore.loaded = None
+    FakeStore.saved = None
+    FakeStore.constructor_args = None
+    FakeStore.save_error = None
+    sys.modules.pop("custom_components.biofects_butler.profile_store", None)
+    return importlib.import_module("custom_components.biofects_butler.profile_store")
+
+
+def test_empty_store_loads_builtin_default(store_module) -> None:
+    """A fresh or unavailable store always exposes a usable HUD profile."""
+    hass = SimpleNamespace()
+    store = store_module.DashboardProfileStore(hass)
+
+    asyncio.run(store.async_load())
+
+    assert FakeStore.constructor_args == (
+        hass,
+        store_module.DASHBOARD_STORAGE_VERSION,
+        "biofects_butler.dashboard_profiles",
+    )
+    assert [profile.profile_id for profile in store.profiles] == ["default"]
+    assert store.for_display("unassigned").profile_id == "default"
+
+
+def test_load_recovers_valid_profiles_and_assignments(store_module) -> None:
+    """Corrupt records are skipped without losing valid neighboring data."""
+    custom = dict(store_module.DEFAULT_PROFILE_PAYLOAD)
+    custom.update(
+        profile_id="bedroom", name="Bedroom", theme="holographic_interface"
+    )
+    corrupt = dict(store_module.DEFAULT_PROFILE_PAYLOAD)
+    corrupt.update(profile_id="bad", schema_version=99)
+    FakeStore.loaded = {
+        "profiles": [custom, corrupt, "not-an-object"],
+        "displays": [
+            {
+                "display_id": "wall-tablet",
+                "name": "Wall Tablet",
+                "model": "SM-T733",
+                "viewport_class": "expanded",
+                "renderer_schema_version": 1,
+            },
+            {"display_id": "broken"},
+        ],
+        "assignments": {
+            "wall-tablet": "bedroom",
+            "missing-profile": "missing",
+            "INVALID DISPLAY": "bedroom",
+        },
+    }
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+
+    asyncio.run(store.async_load())
+
+    assert [profile.profile_id for profile in store.profiles] == [
+        "bedroom",
+        "default",
+    ]
+    assert store.assignments == {"wall-tablet": "bedroom"}
+    assert store.display_themes == {"wall-tablet": "holographic_interface"}
+    assert store.for_display("wall-tablet").profile_id == "bedroom"
+    assert FakeStore.saved["display_themes"] == {
+        "wall-tablet": "holographic_interface"
+    }
+    assert "theme" not in next(
+        profile for profile in FakeStore.saved["profiles"]
+        if profile["profile_id"] == "bedroom"
+    )
+
+
+def test_upsert_and_assignment_persist_complete_snapshot(store_module) -> None:
+    """Profile and assignment changes save canonical complete snapshots."""
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(store.async_load())
+    custom = dict(store_module.DEFAULT_PROFILE_PAYLOAD)
+    custom.update(profile_id="kitchen", name="Kitchen")
+
+    profile = asyncio.run(store.async_upsert(custom))
+    asyncio.run(
+        store.async_register_display(
+            {
+                "display_id": "display-123",
+                "name": "Kitchen",
+                "model": "SM-T733",
+                "viewport_class": "expanded",
+                "renderer_schema_version": 1,
+            }
+        )
+    )
+    asyncio.run(
+        store.async_assign(
+            "display-123", profile.profile_id, "holographic_interface"
+        )
+    )
+
+    assert FakeStore.saved["assignments"] == {"display-123": "kitchen"}
+    assert FakeStore.saved["display_themes"] == {
+        "display-123": "holographic_interface"
+    }
+    assert FakeStore.saved["displays"][0]["model"] == "SM-T733"
+    assert [item["profile_id"] for item in FakeStore.saved["profiles"]] == [
+        "default",
+        "kitchen",
+    ]
+
+
+def test_delete_display_clears_registration_assignment_and_theme(store_module) -> None:
+    """Deleting a stale display removes all data keyed by its stable ID."""
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(store.async_load())
+    asyncio.run(
+        store.async_register_display(
+            {
+                "display_id": "stale-tablet",
+                "name": "Samsung SM-T733",
+                "model": "SM-T733",
+                "viewport_class": "medium",
+                "renderer_schema_version": 1,
+            }
+        )
+    )
+    asyncio.run(store.async_assign("stale-tablet", "default", "holographic_interface"))
+
+    asyncio.run(store.async_delete_display("stale-tablet"))
+
+    assert store.displays == ()
+    assert store.assignments == {}
+    assert store.display_themes == {}
+    assert FakeStore.saved["displays"] == []
+
+
+def test_delete_clears_assignments_and_preserves_default(store_module) -> None:
+    """Deleting a profile falls assigned displays back to the built-in HUD."""
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(store.async_load())
+    custom = dict(store_module.DEFAULT_PROFILE_PAYLOAD)
+    custom.update(profile_id="kitchen", name="Kitchen")
+    asyncio.run(store.async_upsert(custom))
+    asyncio.run(
+        store.async_register_display(
+            {
+                "display_id": "display-123",
+                "name": "Kitchen",
+                "model": "SM-T733",
+                "viewport_class": "expanded",
+                "renderer_schema_version": 1,
+            }
+        )
+    )
+    asyncio.run(store.async_assign("display-123", "kitchen"))
+
+    asyncio.run(store.async_delete("kitchen"))
+
+    assert store.assignments == {}
+    assert store.for_display("display-123").profile_id == "default"
+    with pytest.raises(store_module.ProfileValidationError, match="cannot be deleted"):
+        asyncio.run(store.async_delete("default"))
+
+
+def test_rejected_update_keeps_last_valid_snapshot(store_module) -> None:
+    """Invalid replacement data never mutates or saves the active profile."""
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(store.async_load())
+    before = store.get("default")
+    invalid = dict(store_module.DEFAULT_PROFILE_PAYLOAD)
+    invalid["schema_version"] = 99
+
+    with pytest.raises(store_module.ProfileValidationError):
+        asyncio.run(store.async_upsert(invalid))
+
+    assert store.get("default") is before
+    assert FakeStore.saved is None
+
+
+def test_storage_failure_keeps_last_valid_snapshot(store_module) -> None:
+    """An HA storage error cannot expose a profile that was not persisted."""
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(store.async_load())
+    custom = dict(store_module.DEFAULT_PROFILE_PAYLOAD)
+    custom.update(profile_id="kitchen", name="Kitchen")
+    FakeStore.save_error = OSError("disk unavailable")
+
+    with pytest.raises(OSError, match="disk unavailable"):
+        asyncio.run(store.async_upsert(custom))
+
+    assert store.get("kitchen") is None
+    assert [profile.profile_id for profile in store.profiles] == ["default"]
+
+
+def test_rejects_assignment_before_display_registration(store_module) -> None:
+    """Assignments cannot target an unknown or spoofed display ID."""
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(store.async_load())
+
+    with pytest.raises(store_module.ProfileValidationError, match="unknown display"):
+        asyncio.run(store.async_assign("display-123", "default"))
+
+
+def test_load_migrates_and_rewrites_legacy_profile(store_module) -> None:
+    """A supported historical profile is validated and saved canonically."""
+    FakeStore.loaded = {
+        "profiles": [
+            {
+                "version": 0,
+                "id": "legacy",
+                "name": "Legacy",
+                "default_screen": "home",
+                "screens": [
+                    {
+                        "id": "home",
+                        "title": "Home",
+                        "layout": "focused_control",
+                        "sections": [
+                            {
+                                "id": "core",
+                                "type": "status_overview",
+                                "region": "core",
+                                "entities": ["sensor.temperature"],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        "displays": [],
+        "assignments": {},
+    }
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+
+    asyncio.run(store.async_load())
+
+    assert store.get("legacy").schema_version == 1
+    saved = next(
+        profile for profile in FakeStore.saved["profiles"]
+        if profile["profile_id"] == "legacy"
+    )
+    assert saved["schema_version"] == 1
+    assert "version" not in saved
+
+
+def test_load_rewrites_recovered_snapshot_without_future_profile(store_module) -> None:
+    """Unsupported profiles and dangling assignments are removed atomically."""
+    future = dict(store_module.DEFAULT_PROFILE_PAYLOAD)
+    future.update(profile_id="future", schema_version=99)
+    FakeStore.loaded = {
+        "profiles": [future],
+        "displays": [],
+        "assignments": {"missing-display": "future"},
+    }
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+
+    asyncio.run(store.async_load())
+
+    assert [profile.profile_id for profile in store.profiles] == ["default"]
+    assert FakeStore.saved["assignments"] == {}
+    assert [item["profile_id"] for item in FakeStore.saved["profiles"]] == [
+        "default"
+    ]

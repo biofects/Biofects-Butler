@@ -1,0 +1,50 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "Biofects Butler is already configured.",
+      "no_backends_available": "No supported conversation backends are available. Add a conversation integration in Home Assistant, then try again."
+    },
+    "error": {
+      "provider_not_configured": "The selected provider is not configured yet. Complete its Home Assistant setup, then continue."
+    },
+    "step": {
+      "user": {
+        "description": "Set up Biofects Butler for this Home Assistant instance.",
+        "title": "Biofects Butler"
+      },
+      "pipeline": {
+        "description": "Preferred Assist pipeline: **{pipeline_state}**. Missing components: **{missing_components}**. You can continue and return after updating the Voice assistant pipeline.",
+        "title": "Assist pipeline check"
+      },
+      "backend": {
+        "data": {
+          "conversation_backend": "Conversation backend"
+        },
+        "description": "Choose a backend currently available to Home Assistant. Provider credentials remain in the provider's own integration.",
+        "title": "Conversation backend"
+      },
+      "provider": {
+        "description": "[{provider} setup in Home Assistant]({configuration_url}) must be completed in its owning integration. Return here and select Submit to check again.",
+        "title": "Configure provider"
+      },
+      "summary": {
+        "description": "Preferred pipeline: **{pipeline_state}**. Conversation backend: **{backend}**. Submit to finish Butler setup.",
+        "title": "Setup summary"
+      }
+    }
+  },
+  "options": {
+    "abort": {
+      "no_configured_backends": "No configured conversation backends are available. Rerun Butler configuration after adding one."
+    },
+    "step": {
+      "init": {
+        "data": {
+          "conversation_backend": "Conversation backend"
+        },
+        "description": "Choose from conversation backends already configured in Home Assistant.",
+        "title": "Butler options"
+      }
+    }
+  }
+}

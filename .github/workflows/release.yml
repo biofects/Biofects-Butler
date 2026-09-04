@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Validate tag and manifest versions
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          version="${RELEASE_VERSION#v}"
+          manifest_version=$(python -c 'import json; print(json.load(open("custom_components/biofects_butler/manifest.json"))["version"])')
+          test "$version" = "$manifest_version"
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pytest -q tests
+      - name: Package integration
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: bash tools/package-integration.sh "${RELEASE_VERSION#v}"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip
+            dist/*.sha256
+          generate_release_notes: true
