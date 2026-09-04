@@ -167,6 +167,37 @@ def test_delete_display_clears_registration_assignment_and_theme(store_module) -
     assert FakeStore.saved["displays"] == []
 
 
+def test_free_registration_rejects_third_device_but_allows_updates(store_module) -> None:
+    """Free keeps two stable registrations and lets either device reconnect."""
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(store.async_load())
+
+    def registration(display_id: str, name: str) -> dict[str, object]:
+        return {
+            "display_id": display_id,
+            "name": name,
+            "model": "SM-T733",
+            "viewport_class": "medium",
+            "renderer_schema_version": 1,
+        }
+
+    asyncio.run(store.async_register_display(registration("display-one", "One")))
+    asyncio.run(store.async_register_display(registration("display-two", "Two")))
+    asyncio.run(store.async_register_display(registration("display-one", "Updated One")))
+
+    with pytest.raises(
+        store_module.ProfileValidationError,
+        match="Free supports up to 2 devices",
+    ):
+        asyncio.run(store.async_register_display(registration("display-three", "Three")))
+
+    assert [display.display_id for display in store.displays] == [
+        "display-one",
+        "display-two",
+    ]
+    assert store.displays[0].name == "Updated One"
+
+
 def test_delete_clears_assignments_and_preserves_default(store_module) -> None:
     """Deleting a profile falls assigned displays back to the built-in HUD."""
     store = store_module.DashboardProfileStore(SimpleNamespace())

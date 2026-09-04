@@ -9,7 +9,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
 
-from .const import DOMAIN
+from .const import DEFAULT_ASSISTANT_NAME, DOMAIN
 from .setup_options import async_get_setup_options
 from .status import ButlerStatus, get_status
 
@@ -47,7 +47,7 @@ class BiofectsButlerConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Show the preferred Assist pipeline readiness check."""
-        self._status = get_status(self.hass, "Home")
+        self._status = get_status(self.hass, DEFAULT_ASSISTANT_NAME)
         if user_input is not None:
             return await self.async_step_backend()
 
@@ -123,7 +123,7 @@ class BiofectsButlerConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Summarize and save Butler setup."""
-        self._status = get_status(self.hass, "Home")
+        self._status = get_status(self.hass, DEFAULT_ASSISTANT_NAME)
         if user_input is not None:
             data = {CONF_BACKEND: self._selected_backend}
             if self._reconfigure:

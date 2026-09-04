@@ -24,7 +24,7 @@ def test_status_contract(websocket_modules) -> None:
     assert message_id == 7
     assert status["version"] == 2
     assert status["ha_connected"] is True
-    assert status["assistant_name"] == "Home"
+    assert status["assistant_name"] == "Biofects Butler"
     assert status["assist_pipeline_ready"] is False
     assert status["wake_word"] == {
         "ready": False,
@@ -47,7 +47,6 @@ def test_registers_status_command(websocket_modules) -> None:
     assert hass.registered_commands == [
         module.websocket_status,
         module.websocket_subscribe_status,
-        module.websocket_set_assistant_name,
         module.websocket_get_setup_options,
         module.websocket_get_dashboard_profiles,
         module.websocket_save_dashboard_profile,
@@ -59,34 +58,20 @@ def test_registers_status_command(websocket_modules) -> None:
     ]
 
 
-def test_set_assistant_name_persists_and_notifies(websocket_modules) -> None:
-    """A name write persists and refreshes every subscribed client."""
+def test_status_ignores_legacy_assistant_name_option(websocket_modules) -> None:
+    """Free always exposes its fixed assistant name."""
     module = importlib.import_module("custom_components.biofects_butler.websocket_api")
-    entry = SimpleNamespace(options={"other": True})
-
-    class ConfigEntries:
-        def async_entries(self, domain):
-            return [entry]
-
-        def async_update_entry(self, updated_entry, *, options):
-            updated_entry.options = options
-
-    hass = SimpleNamespace(config_entries=ConfigEntries(), dispatcher={})
-    notifications = []
-    hass.dispatcher[module.SIGNAL_STATUS_UPDATED] = [lambda: notifications.append(True)]
     results = []
-    connection = SimpleNamespace(
-        send_result=lambda message_id, data: results.append((message_id, data)),
-        send_error=lambda *args: None,
+    hass = SimpleNamespace(
+        config_entries=SimpleNamespace(
+            async_entries=lambda domain: [SimpleNamespace(options={"assistant_name": "Jarvis"})]
+        )
     )
+    connection = SimpleNamespace(send_result=lambda message_id, data: results.append((message_id, data)))
 
-    module.websocket_set_assistant_name(
-        hass, connection, {"id": 8, "name": "Jarvis"}
-    )
+    module.websocket_status(hass, connection, {"id": 8})
 
-    assert entry.options == {"other": True, "assistant_name": "Jarvis"}
-    assert results == [(8, {"assistant_name": "Jarvis"})]
-    assert notifications == [True]
+    assert results[0][1]["assistant_name"] == "Biofects Butler"
 
 
 def test_subscribe_pushes_pipeline_updates_and_cleans_up(websocket_modules) -> None:
@@ -128,7 +113,7 @@ def test_subscribe_pushes_pipeline_updates_and_cleans_up(websocket_modules) -> N
 
     assert results == [9]
     assert len(messages) == 2
-    assert messages[0]["event"]["assistant_name"] == "Home"
+    assert messages[0]["event"]["assistant_name"] == "Biofects Butler"
     assert messages[1]["event"] == messages[0]["event"]
 
     connection.subscriptions[9]()

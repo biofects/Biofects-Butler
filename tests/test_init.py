@@ -93,7 +93,6 @@ def test_setup_registers_websocket_command(integration_module) -> None:
     assert [command.__name__ for command in hass.commands] == [
         "websocket_status",
         "websocket_subscribe_status",
-        "websocket_set_assistant_name",
         "websocket_get_setup_options",
         "websocket_get_dashboard_profiles",
         "websocket_save_dashboard_profile",

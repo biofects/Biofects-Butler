@@ -26,6 +26,7 @@ from .profiles import (
 
 _DISPLAY_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,127}$")
 VIEWPORT_CLASSES = frozenset({"compact", "medium", "expanded"})
+MAX_FREE_DISPLAYS = 2
 
 DEFAULT_PROFILE_PAYLOAD: dict[str, Any] = {
     "schema_version": 1,
@@ -245,6 +246,14 @@ class DashboardProfileStore:
         """Validate and persist renderer capabilities for one display."""
         display = parse_display_registration(payload)
         async with self._mutation_lock:
+            if (
+                display.display_id not in self._displays
+                and len(self._displays) >= MAX_FREE_DISPLAYS
+            ):
+                raise ProfileValidationError(
+                    "Biofects Butler Free supports up to 2 devices; "
+                    "delete an existing display before adding another"
+                )
             displays = {**self._displays, display.display_id: display}
             await self._async_save_snapshot(
                 self._profiles, displays, self._assignments, self._display_themes

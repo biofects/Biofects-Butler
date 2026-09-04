@@ -15,7 +15,6 @@ from homeassistant.helpers.dispatcher import (
 )
 
 from .const import (
-    CONF_ASSISTANT_NAME,
     DASHBOARD_PROFILE_SCHEMA_VERSION,
     DATA_PROFILE_STORE,
     DEFAULT_ASSISTANT_NAME,
@@ -33,7 +32,6 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
     """Register Butler WebSocket commands."""
     websocket_api.async_register_command(hass, websocket_status)
     websocket_api.async_register_command(hass, websocket_subscribe_status)
-    websocket_api.async_register_command(hass, websocket_set_assistant_name)
     websocket_api.async_register_command(hass, websocket_get_setup_options)
     websocket_api.async_register_command(hass, websocket_get_dashboard_profiles)
     websocket_api.async_register_command(hass, websocket_save_dashboard_profile)
@@ -46,13 +44,7 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
 
 def _status_payload(hass: HomeAssistant) -> dict[str, Any]:
     """Build the current status payload."""
-    entries = hass.config_entries.async_entries(DOMAIN)
-    assistant_name = (
-        entries[0].options.get(CONF_ASSISTANT_NAME, DEFAULT_ASSISTANT_NAME)
-        if entries
-        else DEFAULT_ASSISTANT_NAME
-    )
-    return get_status(hass, assistant_name).as_dict()
+    return get_status(hass, DEFAULT_ASSISTANT_NAME).as_dict()
 
 
 @callback
@@ -108,33 +100,6 @@ def websocket_subscribe_status(
     connection.subscriptions[msg["id"]] = unsubscribe
     connection.send_result(msg["id"])
     send_status()
-
-
-@callback
-@websocket_api.websocket_command(
-    {
-        vol.Required("type"): "biofects_butler/set_assistant_name",
-        vol.Required("name"): vol.All(str, vol.Strip, vol.Length(min=1, max=40)),
-    }
-)
-def websocket_set_assistant_name(
-    hass: HomeAssistant,
-    connection: websocket_api.ActiveConnection,
-    msg: dict[str, Any],
-) -> None:
-    """Persist the assistant name and notify every subscribed client."""
-    entries = hass.config_entries.async_entries(DOMAIN)
-    if not entries:
-        connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "Butler is not configured")
-        return
-
-    entry = entries[0]
-    hass.config_entries.async_update_entry(
-        entry,
-        options={**entry.options, CONF_ASSISTANT_NAME: msg["name"]},
-    )
-    connection.send_result(msg["id"], {CONF_ASSISTANT_NAME: msg["name"]})
-    async_dispatcher_send(hass, SIGNAL_STATUS_UPDATED)
 
 
 @websocket_api.websocket_command(

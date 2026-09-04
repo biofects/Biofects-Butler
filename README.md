@@ -6,7 +6,8 @@ Biofects Butler is the Home Assistant integration for the Biofects Butler Androi
 
 - Administrator-managed Butler dashboard profiles and pages.
 - Grouped entity cards, quick actions, calendars, weather, media, and service controls.
-- Per-display registration, profile assignment, and Butler Neon or Holographic themes.
+- Registration for up to two Free Android devices, with per-display profile assignment and Butler Neon or Holographic themes.
+- A fixed Free assistant identity of `Biofects Butler`; the app and integration do not expose name editing.
 - Native Home Assistant OAuth metadata for the Android application.
 - Local push updates with no Biofects cloud dependency.
 
