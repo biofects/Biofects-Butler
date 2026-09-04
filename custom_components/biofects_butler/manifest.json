@@ -3,7 +3,7 @@
   "name": "Biofects Butler",
   "codeowners": ["@Biofects"],
   "config_flow": true,
-  "dependencies": ["frontend"],
+  "dependencies": ["assist_pipeline", "frontend", "http"],
   "documentation": "https://github.com/Biofects/Biofects-Butler",
   "issue_tracker": "https://github.com/Biofects/Biofects-Butler/issues",
   "integration_type": "service",

@@ -27,6 +27,8 @@ def install_status_stubs(
     wake_word = ModuleType("homeassistant.components.wake_word")
     wake_word.async_default_entity = lambda hass: None
     helpers = ModuleType("homeassistant.helpers")
+    config_validation = ModuleType("homeassistant.helpers.config_validation")
+    config_validation.config_entry_only_config_schema = lambda domain: {domain: {}}
     entity_registry = ModuleType("homeassistant.helpers.entity_registry")
     entity_registry.EntityRegistry = object
     entity_registry.EVENT_ENTITY_REGISTRY_UPDATED = "entity_registry_updated"
@@ -60,6 +62,7 @@ def install_status_stubs(
     loader.async_get_integration = async_get_integration
     homeassistant = sys.modules["homeassistant"]
     homeassistant.loader = loader
+    helpers.config_validation = config_validation
     helpers.entity_registry = entity_registry
     helpers.dispatcher = dispatcher
 
@@ -69,6 +72,9 @@ def install_status_stubs(
     monkeypatch.setitem(sys.modules, "homeassistant.components.assist_pipeline.error", assist_error)
     monkeypatch.setitem(sys.modules, "homeassistant.components.wake_word", wake_word)
     monkeypatch.setitem(sys.modules, "homeassistant.helpers", helpers)
+    monkeypatch.setitem(
+        sys.modules, "homeassistant.helpers.config_validation", config_validation
+    )
     monkeypatch.setitem(sys.modules, "homeassistant.helpers.entity_registry", entity_registry)
     monkeypatch.setitem(sys.modules, "homeassistant.helpers.dispatcher", dispatcher)
     monkeypatch.setitem(sys.modules, "homeassistant.loader", loader)
