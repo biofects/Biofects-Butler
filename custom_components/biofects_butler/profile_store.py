@@ -26,6 +26,7 @@ from .profiles import (
 
 _DISPLAY_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,127}$")
 VIEWPORT_CLASSES = frozenset({"compact", "medium", "expanded"})
+DISPLAY_EDITIONS = frozenset({"free", "paid"})
 MAX_FREE_DISPLAYS = 2
 
 DEFAULT_PROFILE_PAYLOAD: dict[str, Any] = {
@@ -76,6 +77,7 @@ class DisplayRegistration:
     model: str
     viewport_class: str
     renderer_schema_version: int
+    edition: str = "free"
     device_key: str | None = None
     previous_display_id: str | None = None
 
@@ -83,6 +85,8 @@ class DisplayRegistration:
         """Return a JSON-compatible registration payload."""
         payload = asdict(self)
         payload.pop("previous_display_id")
+        if self.edition == "free":
+            payload.pop("edition")
         return {key: value for key, value in payload.items() if value is not None}
 
 
@@ -293,6 +297,8 @@ class DashboardProfileStore:
                 if display_id not in replacement_ids
             }
             if (
+                display.edition == "free"
+                and
                 display.display_id not in remaining_displays
                 and len(remaining_displays) >= MAX_FREE_DISPLAYS
                 and not replacement_ids
@@ -428,7 +434,7 @@ def parse_display_registration(payload: Mapping[str, Any]) -> DisplayRegistratio
         "viewport_class",
         "renderer_schema_version",
     }
-    optional = {"device_key", "previous_display_id"}
+    optional = {"edition", "device_key", "previous_display_id"}
     missing = expected - payload.keys()
     unknown = payload.keys() - expected - optional
     if missing:
@@ -455,6 +461,9 @@ def parse_display_registration(payload: Mapping[str, Any]) -> DisplayRegistratio
         renderer_schema_version, bool
     ) or not 1 <= renderer_schema_version <= DASHBOARD_PROFILE_SCHEMA_VERSION:
         raise ProfileValidationError("display renderer schema version is unsupported")
+    edition = payload.get("edition", "free")
+    if edition not in DISPLAY_EDITIONS:
+        raise ProfileValidationError("display.edition must be free or paid")
     device_key = payload.get("device_key")
     if device_key is not None and not _valid_display_id(device_key):
         raise ProfileValidationError("display.device_key must be a lowercase ID")
@@ -471,6 +480,7 @@ def parse_display_registration(payload: Mapping[str, Any]) -> DisplayRegistratio
         model=model,
         viewport_class=viewport_class,
         renderer_schema_version=renderer_schema_version,
+        edition=edition,
         device_key=device_key,
         previous_display_id=previous_display_id,
     )

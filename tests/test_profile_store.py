@@ -198,6 +198,48 @@ def test_free_registration_rejects_third_device_but_allows_updates(store_module)
     assert store.displays[0].name == "Updated One"
 
 
+def test_paid_registration_is_not_subject_to_free_device_limit(store_module) -> None:
+    """Paid evaluation clients can register beyond the Free display cap."""
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(store.async_load())
+    registration = {
+        "name": "Display",
+        "model": "Android",
+        "viewport_class": "medium",
+        "renderer_schema_version": 1,
+    }
+
+    for display_id in ("free-one", "free-two"):
+        asyncio.run(store.async_register_display({
+            **registration, "display_id": display_id,
+        }))
+    paid = asyncio.run(store.async_register_display({
+        **registration, "display_id": "paid-three", "edition": "paid",
+    }))
+
+    assert paid.edition == "paid"
+    assert [display.display_id for display in store.displays] == [
+        "free-one", "free-two", "paid-three",
+    ]
+    assert FakeStore.saved["displays"][-1]["edition"] == "paid"
+
+
+def test_registration_rejects_unknown_edition(store_module) -> None:
+    """Only recognized app editions may affect registration policy."""
+    with pytest.raises(
+        store_module.ProfileValidationError,
+        match="edition must be free or paid",
+    ):
+        store_module.parse_display_registration({
+            "display_id": "display-one",
+            "name": "Display",
+            "model": "Android",
+            "viewport_class": "medium",
+            "renderer_schema_version": 1,
+            "edition": "unlimited",
+        })
+
+
 def test_reregistration_replaces_old_id_and_preserves_assignment(store_module) -> None:
     """A physical device receives one record even when its registration ID changes."""
     store = store_module.DashboardProfileStore(SimpleNamespace())
