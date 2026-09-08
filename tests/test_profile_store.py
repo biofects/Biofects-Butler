@@ -198,6 +198,177 @@ def test_free_registration_rejects_third_device_but_allows_updates(store_module)
     assert store.displays[0].name == "Updated One"
 
 
+def test_reregistration_replaces_old_id_and_preserves_assignment(store_module) -> None:
+    """A physical device receives one record even when its registration ID changes."""
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(store.async_load())
+    custom = dict(store_module.DEFAULT_PROFILE_PAYLOAD)
+    custom.update(profile_id="kitchen", name="Kitchen")
+    asyncio.run(store.async_upsert(custom))
+    asyncio.run(
+        store.async_register_display(
+            {
+                "display_id": "android_old",
+                "name": "Samsung SM-T733",
+                "model": "SM-T733",
+                "viewport_class": "medium",
+                "renderer_schema_version": 1,
+            }
+        )
+    )
+    asyncio.run(
+        store.async_assign("android_old", "kitchen", "holographic_interface")
+    )
+
+    registered = asyncio.run(
+        store.async_register_display(
+            {
+                "display_id": "android_stable",
+                "device_key": "android_stable",
+                "previous_display_id": "android_old",
+                "name": "Samsung SM-T733",
+                "model": "SM-T733",
+                "viewport_class": "medium",
+                "renderer_schema_version": 1,
+            }
+        )
+    )
+
+    assert registered.display_id == "android_stable"
+    assert [display.display_id for display in store.displays] == ["android_stable"]
+    assert store.assignments == {"android_stable": "kitchen"}
+    assert store.display_themes == {"android_stable": "holographic_interface"}
+    assert FakeStore.saved["displays"] == [
+        {
+            "display_id": "android_stable",
+            "name": "Samsung SM-T733",
+            "model": "SM-T733",
+            "viewport_class": "medium",
+            "renderer_schema_version": 1,
+            "device_key": "android_stable",
+        }
+    ]
+
+
+def test_reregistration_deduplicates_matching_device_key(store_module) -> None:
+    """A matching stable device key removes an older registration automatically."""
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(store.async_load())
+
+    for display_id in ("android_first", "android_second"):
+        asyncio.run(
+            store.async_register_display(
+                {
+                    "display_id": display_id,
+                    "device_key": "android_physical_device",
+                    "name": "Wall Display",
+                    "model": "UC-Display",
+                    "viewport_class": "expanded",
+                    "renderer_schema_version": 1,
+                }
+            )
+        )
+
+    assert [display.display_id for display in store.displays] == ["android_second"]
+
+
+def test_first_keyed_registration_collapses_matching_legacy_records(store_module) -> None:
+    """Stable IDs replace duplicate legacy records created before device keys existed."""
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(store.async_load())
+    for display_id in ("android_legacy_free", "android_legacy_paid"):
+        asyncio.run(
+            store.async_register_display(
+                {
+                    "display_id": display_id,
+                    "name": "samsung SM-T733",
+                    "model": "SM-T733",
+                    "viewport_class": "medium",
+                    "renderer_schema_version": 1,
+                }
+            )
+        )
+
+    asyncio.run(
+        store.async_register_display(
+            {
+                "display_id": "android_stable_tablet",
+                "device_key": "android_stable_tablet",
+                "name": "samsung SM-T733",
+                "model": "SM-T733",
+                "viewport_class": "medium",
+                "renderer_schema_version": 1,
+            }
+        )
+    )
+
+    assert [display.display_id for display in store.displays] == [
+        "android_stable_tablet"
+    ]
+
+    asyncio.run(
+        store.async_register_display(
+            {
+                "display_id": "android_legacy_returns",
+                "name": "samsung SM-T733",
+                "model": "SM-T733",
+                "viewport_class": "medium",
+                "renderer_schema_version": 1,
+            }
+        )
+    )
+
+    assert [display.display_id for display in store.displays] == [
+        "android_stable_tablet"
+    ]
+
+
+def test_replacement_is_allowed_for_grandfathered_over_limit_store(store_module) -> None:
+    """An existing physical device can migrate even when legacy data exceeds the cap."""
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(store.async_load())
+    registration = {
+        "name": "Other Display",
+        "model": "Other",
+        "viewport_class": "medium",
+        "renderer_schema_version": 1,
+    }
+    store._displays = {
+        "echo": store_module.parse_display_registration(
+            {**registration, "display_id": "echo"}
+        ),
+        "unifi": store_module.parse_display_registration(
+            {**registration, "display_id": "unifi"}
+        ),
+        "tablet_old": store_module.parse_display_registration(
+            {
+                **registration,
+                "display_id": "tablet_old",
+                "name": "samsung SM-T733",
+                "model": "SM-T733",
+            }
+        ),
+    }
+
+    asyncio.run(
+        store.async_register_display(
+            {
+                **registration,
+                "display_id": "tablet_stable",
+                "device_key": "tablet_stable",
+                "name": "samsung SM-T733",
+                "model": "SM-T733",
+            }
+        )
+    )
+
+    assert [display.display_id for display in store.displays] == [
+        "echo",
+        "tablet_stable",
+        "unifi",
+    ]
+
+
 def test_delete_clears_assignments_and_preserves_default(store_module) -> None:
     """Deleting a profile falls assigned displays back to the built-in HUD."""
     store = store_module.DashboardProfileStore(SimpleNamespace())

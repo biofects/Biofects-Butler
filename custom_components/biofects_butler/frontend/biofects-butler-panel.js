@@ -326,13 +326,13 @@ class BiofectsButlerPanel extends HTMLElement {
     const name = binding.name || state?.attributes?.friendly_name || binding.target_id;
     const stateText = state ? `${state.state}${state.attributes?.unit_of_measurement ? ` ${state.attributes.unit_of_measurement}` : ""}` : "Unavailable";
     const icon = binding.icon || state?.attributes?.icon || this._defaultIcon(binding.target_id, state?.attributes?.device_class);
-    const tapAction = (section.actions || []).find((action) => action.gesture === "tap" && ["more_info", "toggle"].includes(action.type) && action.target_id === binding.target_id);
+    const tapAction = (section.actions || []).find((action) => action.gesture === "tap" && ["more_info", "toggle", "activate"].includes(action.type) && action.target_id === binding.target_id);
     const attributeSummary = (binding.display_attributes || []).map((key) => label(key)).join(" · ");
     return `<div class="entity-card" draggable="true" data-binding-card data-screen="${screenIndex}" data-section="${sectionIndex}" data-binding="${bindingIndex}">
       <div class="drag-handle" title="Drag to reorder or move">⠿</div>
       <ha-icon icon="${escapeHtml(icon)}"></ha-icon>
       <div class="entity-copy"><strong>${escapeHtml(name)}</strong><small>${escapeHtml(stateText)}</small>${(binding.entity_ids || []).length > 1 ? `<small class="attribute-summary">${binding.entity_ids.length} ENTITIES</small>` : attributeSummary ? `<small class="attribute-summary">${escapeHtml(attributeSummary)}</small>` : ""}</div>
-      <span class="tap-mode">${tapAction ? "CONTROLS" : "NO TAP"}</span>
+      <span class="tap-mode">${tapAction ? label(tapAction.type) : "NO TAP"}</span>
       <button class="card-settings" title="Edit card" data-action="edit-binding" data-screen="${screenIndex}" data-section="${sectionIndex}" data-binding="${bindingIndex}"><ha-icon icon="mdi:cog-outline"></ha-icon></button>
     </div>`;
   }
@@ -363,8 +363,7 @@ class BiofectsButlerPanel extends HTMLElement {
     const state = this._hass?.states?.[binding.target_id];
     const name = state?.attributes?.friendly_name || binding.target_id;
     const icon = binding.icon || state?.attributes?.icon || this._defaultIcon(binding.target_id, state?.attributes?.device_class);
-    const savedTapMode = (section.actions || []).find((action) => action.gesture === "tap" && ["more_info", "toggle"].includes(action.type) && action.target_id === binding.target_id)?.type || "none";
-    const tapMode = savedTapMode === "toggle" ? "more_info" : savedTapMode;
+    const tapMode = (section.actions || []).find((action) => action.gesture === "tap" && ["more_info", "toggle", "activate"].includes(action.type) && action.target_id === binding.target_id)?.type || "none";
     const graphType = binding.graph_type || "auto";
     const role = binding.role || "none";
     const hiddenAttributes = new Set(["attribution", "device_class", "friendly_name", "icon", "supported_features"]);
@@ -373,7 +372,7 @@ class BiofectsButlerPanel extends HTMLElement {
     const attributeKeys = [...syntheticAttributes, "state", "last_updated", ...Object.entries(state?.attributes || {}).filter(([key, value]) => !hiddenAttributes.has(key) && !key.endsWith("_unit") && ["string", "number", "boolean"].includes(typeof value)).map(([key]) => key)];
     const selectedAttributes = new Set(binding.display_attributes || []);
     const attributeOptions = attributeKeys.map((key) => `<label class="attribute-option"><input type="checkbox" data-binding-attribute="${escapeHtml(key)}" data-screen="${dialog.screen}" data-section="${dialog.section}" data-binding="${dialog.binding}" ${selectedAttributes.has(key) ? "checked" : ""}><span>${escapeHtml(label(key))}</span><small>${escapeHtml(key === "state" ? state?.state || "unknown" : key === "last_updated" ? "Relative update time" : key === "climate_operation" ? "Action, mode, preset and target" : key === "climate_current" ? "Current temperature and humidity" : String(state?.attributes?.[key] ?? ""))}</small></label>`).join("");
-    return `<div class="editor-modal" data-action="close-editor-dialog"><div class="editor-modal-card" data-dialog-card><header><div class="dialog-title"><ha-icon icon="${escapeHtml(icon)}"></ha-icon><div><p class="eyebrow">EDIT CARD</p><h2>${escapeHtml(binding.name || name)}</h2></div></div><button data-action="close-editor-dialog" title="Close">×</button></header><div class="dialog-fields"><label>DISPLAY NAME<input data-binding-name data-screen="${dialog.screen}" data-section="${dialog.section}" data-binding="${dialog.binding}" value="${escapeHtml(binding.name || "")}" placeholder="${escapeHtml(name)}" maxlength="100"></label><label>ICON OVERRIDE<button class="icon-picker-button" data-action="open-icon-browser" data-screen="${dialog.screen}" data-section="${dialog.section}" data-binding="${dialog.binding}"><ha-icon icon="${escapeHtml(binding.icon || state?.attributes?.icon || icon)}"></ha-icon><span>${escapeHtml(binding.icon || "Choose an MDI icon")}</span><ha-icon icon="mdi:magnify"></ha-icon></button></label><label>HUD ROLE<select data-binding-role data-screen="${dialog.screen}" data-section="${dialog.section}" data-binding="${dialog.binding}">${BINDING_ROLES.map((value) => `<option value="${value}" ${role === value ? "selected" : ""}>${label(value)}</option>`).join("")}</select></label><label>WHEN TAPPED<select data-binding-tap-mode data-screen="${dialog.screen}" data-section="${dialog.section}" data-binding="${dialog.binding}"><option value="none" ${tapMode === "none" ? "selected" : ""}>No action</option><option value="more_info" ${tapMode === "more_info" ? "selected" : ""}>Open controls</option></select></label><label>GRAPH STYLE<select data-binding-graph-type data-screen="${dialog.screen}" data-section="${dialog.section}" data-binding="${dialog.binding}"><option value="auto" ${graphType === "auto" ? "selected" : ""}>Automatic</option><option value="line" ${graphType === "line" ? "selected" : ""}>Line</option><option value="bars" ${graphType === "bars" ? "selected" : ""}>Bars</option><option value="gauge" ${graphType === "gauge" ? "selected" : ""}>Gauge</option><option value="none" ${graphType === "none" ? "selected" : ""}>None</option></select></label></div><section class="attribute-picker"><h3>DASHBOARD DETAILS</h3><p>Select up to 20 state attributes to show on the native card.</p><div class="attribute-options">${attributeOptions}</div></section><footer><button class="danger" data-action="remove-binding" data-screen="${dialog.screen}" data-section="${dialog.section}" data-binding="${dialog.binding}">Remove Card</button><button class="primary" data-action="close-editor-dialog">Done</button></footer></div></div>`;
+    return `<div class="editor-modal" data-action="close-editor-dialog"><div class="editor-modal-card" data-dialog-card><header><div class="dialog-title"><ha-icon icon="${escapeHtml(icon)}"></ha-icon><div><p class="eyebrow">EDIT CARD</p><h2>${escapeHtml(binding.name || name)}</h2></div></div><button data-action="close-editor-dialog" title="Close">×</button></header><div class="dialog-fields"><label>DISPLAY NAME<input data-binding-name data-screen="${dialog.screen}" data-section="${dialog.section}" data-binding="${dialog.binding}" value="${escapeHtml(binding.name || "")}" placeholder="${escapeHtml(name)}" maxlength="100"></label><label>ICON OVERRIDE<button class="icon-picker-button" data-action="open-icon-browser" data-screen="${dialog.screen}" data-section="${dialog.section}" data-binding="${dialog.binding}"><ha-icon icon="${escapeHtml(binding.icon || state?.attributes?.icon || icon)}"></ha-icon><span>${escapeHtml(binding.icon || "Choose an MDI icon")}</span><ha-icon icon="mdi:magnify"></ha-icon></button></label><label>HUD ROLE<select data-binding-role data-screen="${dialog.screen}" data-section="${dialog.section}" data-binding="${dialog.binding}">${BINDING_ROLES.map((value) => `<option value="${value}" ${role === value ? "selected" : ""}>${label(value)}</option>`).join("")}</select></label><label>WHEN TAPPED<select data-binding-tap-mode data-screen="${dialog.screen}" data-section="${dialog.section}" data-binding="${dialog.binding}"><option value="none" ${tapMode === "none" ? "selected" : ""}>No action</option><option value="more_info" ${tapMode === "more_info" ? "selected" : ""}>Open controls</option><option value="toggle" ${tapMode === "toggle" ? "selected" : ""}>Toggle / run</option><option value="activate" ${tapMode === "activate" ? "selected" : ""}>Activate</option></select></label><label>GRAPH STYLE<select data-binding-graph-type data-screen="${dialog.screen}" data-section="${dialog.section}" data-binding="${dialog.binding}"><option value="auto" ${graphType === "auto" ? "selected" : ""}>Automatic</option><option value="line" ${graphType === "line" ? "selected" : ""}>Line</option><option value="bars" ${graphType === "bars" ? "selected" : ""}>Bars</option><option value="gauge" ${graphType === "gauge" ? "selected" : ""}>Gauge</option><option value="none" ${graphType === "none" ? "selected" : ""}>None</option></select></label></div><section class="attribute-picker"><h3>DASHBOARD DETAILS</h3><p>Select up to 20 state attributes to show on the native card.</p><div class="attribute-options">${attributeOptions}</div></section><footer><button class="danger" data-action="remove-binding" data-screen="${dialog.screen}" data-section="${dialog.section}" data-binding="${dialog.binding}">Remove Card</button><button class="primary" data-action="close-editor-dialog">Done</button></footer></div></div>`;
   }
 
   _iconBrowserResults(query = "") {
@@ -985,7 +984,7 @@ class BiofectsButlerPanel extends HTMLElement {
   _syncDefaultPopupActions(section, entityIds) {
     const validTargets = new Set(entityIds);
     section.actions = (section.actions || []).filter((action) =>
-      !["more_info", "toggle"].includes(action.type) || validTargets.has(action.target_id),
+      !["more_info", "toggle", "activate"].includes(action.type) || validTargets.has(action.target_id),
     );
   }
 
@@ -994,7 +993,7 @@ class BiofectsButlerPanel extends HTMLElement {
   }
 
   _setBindingTapAction(section, entityId, type) {
-    const otherActions = (section.actions || []).filter((action) => action.target_id !== entityId || action.gesture !== "tap" || !["more_info", "toggle"].includes(action.type));
+    const otherActions = (section.actions || []).filter((action) => action.target_id !== entityId || action.gesture !== "tap" || !["more_info", "toggle", "activate"].includes(action.type));
     section.actions = (type === "none" ? otherActions : [{ gesture: "tap", type, target_id: entityId }, ...otherActions]).slice(0, 20);
   }
 
@@ -1034,7 +1033,7 @@ class BiofectsButlerPanel extends HTMLElement {
     if (destinationSection === this._draft.screens[source.screen].sections[source.section] && source.binding < destinationIndex) destinationIndex -= 1;
     destinationSection.bindings.splice(destinationIndex, 0, binding);
     if (sourceSection !== destinationSection) {
-      const tapAction = (sourceSection.actions || []).find((action) => action.target_id === binding.target_id && action.gesture === "tap" && ["more_info", "toggle"].includes(action.type));
+      const tapAction = (sourceSection.actions || []).find((action) => action.target_id === binding.target_id && action.gesture === "tap" && ["more_info", "toggle", "activate"].includes(action.type));
       sourceSection.actions = (sourceSection.actions || []).filter((action) => action !== tapAction);
       this._setBindingTapAction(destinationSection, binding.target_id, tapAction?.type || "none");
     }

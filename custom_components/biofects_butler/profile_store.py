@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import re
 from typing import Any
 
@@ -76,10 +76,14 @@ class DisplayRegistration:
     model: str
     viewport_class: str
     renderer_schema_version: int
+    device_key: str | None = None
+    previous_display_id: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible registration payload."""
-        return asdict(self)
+        payload = asdict(self)
+        payload.pop("previous_display_id")
+        return {key: value for key, value in payload.items() if value is not None}
 
 
 class DashboardProfileStore:
@@ -246,19 +250,96 @@ class DashboardProfileStore:
         """Validate and persist renderer capabilities for one display."""
         display = parse_display_registration(payload)
         async with self._mutation_lock:
+            if display.device_key is None:
+                keyed_match = next(
+                    (
+                        registered
+                        for registered in self._displays.values()
+                        if registered.device_key is not None
+                        and registered.name == display.name
+                        and registered.model == display.model
+                        and registered.viewport_class == display.viewport_class
+                    ),
+                    None,
+                )
+                if keyed_match is not None:
+                    display = replace(
+                        display,
+                        display_id=keyed_match.display_id,
+                        device_key=keyed_match.device_key,
+                    )
+            replacement_ids = [
+                display_id
+                for display_id, registered in self._displays.items()
+                if display_id != display.display_id
+                and (
+                    display_id == display.previous_display_id
+                    or (
+                        display.device_key is not None
+                        and registered.device_key == display.device_key
+                    )
+                    or (
+                        display.device_key is not None
+                        and registered.device_key is None
+                        and registered.name == display.name
+                        and registered.model == display.model
+                        and registered.viewport_class == display.viewport_class
+                    )
+                )
+            ]
+            remaining_displays = {
+                display_id: registered
+                for display_id, registered in self._displays.items()
+                if display_id not in replacement_ids
+            }
             if (
-                display.display_id not in self._displays
-                and len(self._displays) >= MAX_FREE_DISPLAYS
+                display.display_id not in remaining_displays
+                and len(remaining_displays) >= MAX_FREE_DISPLAYS
+                and not replacement_ids
             ):
                 raise ProfileValidationError(
                     "Biofects Butler Free supports up to 2 devices; "
                     "delete an existing display before adding another"
                 )
-            displays = {**self._displays, display.display_id: display}
+            displays = {**remaining_displays, display.display_id: display}
+            assignments = {
+                display_id: profile_id
+                for display_id, profile_id in self._assignments.items()
+                if display_id not in replacement_ids
+            }
+            display_themes = {
+                display_id: theme
+                for display_id, theme in self._display_themes.items()
+                if display_id not in replacement_ids
+            }
+            if display.display_id not in assignments:
+                inherited_profile = next(
+                    (
+                        self._assignments[display_id]
+                        for display_id in replacement_ids
+                        if display_id in self._assignments
+                    ),
+                    None,
+                )
+                if inherited_profile is not None:
+                    assignments[display.display_id] = inherited_profile
+            if display.display_id not in display_themes:
+                inherited_theme = next(
+                    (
+                        self._display_themes[display_id]
+                        for display_id in replacement_ids
+                        if display_id in self._display_themes
+                    ),
+                    None,
+                )
+                if inherited_theme is not None:
+                    display_themes[display.display_id] = inherited_theme
             await self._async_save_snapshot(
-                self._profiles, displays, self._assignments, self._display_themes
+                self._profiles, displays, assignments, display_themes
             )
             self._displays = displays
+            self._assignments = assignments
+            self._display_themes = display_themes
         return display
 
     async def async_delete_display(self, display_id: str) -> None:
@@ -347,8 +428,9 @@ def parse_display_registration(payload: Mapping[str, Any]) -> DisplayRegistratio
         "viewport_class",
         "renderer_schema_version",
     }
+    optional = {"device_key", "previous_display_id"}
     missing = expected - payload.keys()
-    unknown = payload.keys() - expected
+    unknown = payload.keys() - expected - optional
     if missing:
         raise ProfileValidationError(
             f"display missing {', '.join(sorted(missing))}"
@@ -373,12 +455,24 @@ def parse_display_registration(payload: Mapping[str, Any]) -> DisplayRegistratio
         renderer_schema_version, bool
     ) or not 1 <= renderer_schema_version <= DASHBOARD_PROFILE_SCHEMA_VERSION:
         raise ProfileValidationError("display renderer schema version is unsupported")
+    device_key = payload.get("device_key")
+    if device_key is not None and not _valid_display_id(device_key):
+        raise ProfileValidationError("display.device_key must be a lowercase ID")
+    previous_display_id = payload.get("previous_display_id")
+    if previous_display_id is not None and not _valid_display_id(
+        previous_display_id
+    ):
+        raise ProfileValidationError(
+            "display.previous_display_id must be a lowercase ID"
+        )
     return DisplayRegistration(
         display_id=display_id,
         name=name,
         model=model,
         viewport_class=viewport_class,
         renderer_schema_version=renderer_schema_version,
+        device_key=device_key,
+        previous_display_id=previous_display_id,
     )
 
 
