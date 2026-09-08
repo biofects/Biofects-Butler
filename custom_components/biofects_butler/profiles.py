@@ -49,6 +49,7 @@ PANEL_HEIGHTS = frozenset({"standard", "full_height"})
 POPUP_STYLES = frozenset({"standard", "projector"})
 GRAPH_TYPES = frozenset({"auto", "line", "bars", "gauge", "none"})
 CALENDAR_INITIAL_VIEWS = frozenset({"dayGridMonth", "listWeek"})
+WEATHER_FORECAST_TYPES = frozenset({"daily", "hourly", "twice_daily"})
 THEMES = frozenset({"butler_neon", "holographic_interface"})
 
 _SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -108,6 +109,7 @@ class ProfileSection:
     bindings: tuple[ProfileBinding, ...]
     actions: tuple[ProfileAction, ...]
     initial_view: str = "dayGridMonth"
+    forecast_type: str = "daily"
     popup_style: str = "standard"
     popup_width: int = 58
     popup_max_width: int = 720
@@ -392,7 +394,7 @@ def _parse_screen(value: Any, path: str) -> ProfileScreen:
 def _parse_section(value: Any, composition: str, path: str) -> ProfileSection:
     data = _mapping(value, path)
     required = {"section_id", "type", "slot"}
-    optional = {"title", "secondary_title", "panel_height", "bindings", "actions", "initial_view", "popup_style", "popup_width", "popup_max_width", "popup_max_height", "content_scale", "projection_color", "projection_origin", "projection_strength"}
+    optional = {"title", "secondary_title", "panel_height", "bindings", "actions", "initial_view", "forecast_type", "popup_style", "popup_width", "popup_max_width", "popup_max_height", "content_scale", "projection_color", "projection_origin", "projection_strength"}
     _keys(data, required, optional, path)
     slot = _choice(data["slot"], COMPOSITION_SLOTS[composition], f"{path}.slot")
     bindings_value = _list(data.get("bindings", []), f"{path}.bindings", maximum=100)
@@ -423,6 +425,7 @@ def _parse_section(value: Any, composition: str, path: str) -> ProfileSection:
             for index, action in enumerate(actions_value)
         ),
         initial_view=_choice(data.get("initial_view", "dayGridMonth"), CALENDAR_INITIAL_VIEWS, f"{path}.initial_view"),
+        forecast_type=_choice(data.get("forecast_type", "daily"), WEATHER_FORECAST_TYPES, f"{path}.forecast_type"),
         popup_style=_choice(data.get("popup_style", "standard"), POPUP_STYLES, f"{path}.popup_style"),
         popup_width=_integer_range(data.get("popup_width", 58), 30, 100, f"{path}.popup_width"),
         popup_max_width=_integer_range(data.get("popup_max_width", 720), 320, 1600, f"{path}.popup_max_width"),
@@ -597,6 +600,8 @@ def _section_as_dict(section: ProfileSection) -> dict[str, Any]:
         data["actions"] = [_action_as_dict(action) for action in section.actions]
     if section.initial_view != "dayGridMonth":
         data["initial_view"] = section.initial_view
+    if section.forecast_type != "daily":
+        data["forecast_type"] = section.forecast_type
     for key, value, default in (
         ("popup_style", section.popup_style, "standard"),
         ("popup_width", section.popup_width, 58),

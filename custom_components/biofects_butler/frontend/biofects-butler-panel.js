@@ -220,6 +220,7 @@ class BiofectsButlerPanel extends HTMLElement {
     }
     if (section.type === "quick_commands") return this._quickCommandsEditor(section, screen, screenIndex, sectionIndex);
     if (section.type === "calendar_form") return this._calendarFormEditor(section, screen, screenIndex, sectionIndex);
+    if (section.type === "weather") return this._weatherEditor(section, screen, screenIndex, sectionIndex);
     const entityDomain = screen.screen_id === "home" && section.slot === "media" ? "media_player"
       : screen.screen_id === "home" && section.slot === "events" ? "calendar" : null;
     const entityCards = (section.bindings || []).map((binding, bindingIndex) =>
@@ -247,6 +248,34 @@ class BiofectsButlerPanel extends HTMLElement {
         ${this._popupSettings(section, screenIndex, sectionIndex)}
         <div class="entity-canvas">${cards || `<button class="drop-empty" data-action="open-entity-picker" data-screen="${screenIndex}" data-section="${sectionIndex}" ${entityDomain ? `data-entity-domain="${entityDomain}"` : ""}><ha-icon icon="mdi:plus-circle-outline"></ha-icon><span>Add card</span></button>`}</div>
       </div>`;
+  }
+
+  _weatherEditor(section, screen, screenIndex, sectionIndex) {
+    const location = `data-screen="${screenIndex}" data-section="${sectionIndex}"`;
+    const weatherEntities = Object.values(this._hass?.states || {})
+      .filter((state) => state.entity_id.startsWith("weather."))
+      .sort((left, right) => (left.attributes.friendly_name || left.entity_id).localeCompare(right.attributes.friendly_name || right.entity_id));
+    const selected = (section.bindings || []).find((binding) => binding.role === "weather_source")
+      || (section.bindings || []).find((binding) => binding.target_id?.startsWith("weather."));
+    const selectedId = selected?.target_id || "";
+    const features = Number(this._hass?.states?.[selectedId]?.attributes?.supported_features || 0);
+    const supported = [
+      ["daily", "Daily", 1],
+      ["hourly", "Hourly", 2],
+      ["twice_daily", "Twice Daily", 4],
+    ].filter(([, , flag]) => features === 0 || (features & flag));
+    if (!supported.some(([value]) => value === (section.forecast_type || "daily"))) {
+      section.forecast_type = supported[0]?.[0] || "daily";
+    }
+    return `<div class="section-block slot-${section.slot} ${section.panel_height === "full_height" ? "panel-full-height" : ""}">
+      <div class="slot-heading"><label><span>${escapeHtml(this._slotLabel(section.slot, screen))}</span><input data-section-heading ${location} value="${escapeHtml(section.title || "")}" placeholder="Weather"></label><label><span>PANEL TYPE</span><select data-section-type ${location}>${SECTION_TYPES.map((type) => `<option value="${type}" ${section.type === type ? "selected" : ""}>${label(type)}</option>`).join("")}</select></label>${this._panelControls(screenIndex, sectionIndex, section, screen.sections.length)}</div>
+      <div class="form-config-grid">
+        <label><span>WEATHER PROVIDER</span><select data-weather-entity ${location}><option value="">Select a Home Assistant weather entity</option>${weatherEntities.map((state) => `<option value="${escapeHtml(state.entity_id)}" ${state.entity_id === selectedId ? "selected" : ""}>${escapeHtml(state.attributes.friendly_name || state.entity_id)}</option>`).join("")}</select></label>
+        <label><span>FORECAST</span><select data-weather-forecast ${location} ${selectedId ? "" : "disabled"}>${supported.map(([value, name]) => `<option value="${value}" ${(section.forecast_type || "daily") === value ? "selected" : ""}>${name}</option>`).join("")}</select></label>
+      </div>
+      ${this._popupSettings(section, screenIndex, sectionIndex)}
+      <div class="entity-canvas">${selected ? this._bindingCard(selected, section, screenIndex, sectionIndex, section.bindings.indexOf(selected)) : `<div class="drop-empty"><ha-icon icon="mdi:weather-partly-cloudy"></ha-icon><span>Select a weather provider above</span></div>`}</div>
+    </div>`;
   }
 
   _quickCommandsEditor(section, screen, screenIndex, sectionIndex) {
@@ -663,6 +692,18 @@ class BiofectsButlerPanel extends HTMLElement {
       return;
     }
     if (!this._draft) return;
+    if (element.dataset.weatherEntity !== undefined) {
+      const section = this._draft.screens[Number(element.dataset.screen)].sections[Number(element.dataset.section)];
+      const retained = (section.bindings || []).filter((binding) => !binding.target_id?.startsWith("weather.") && binding.role !== "weather_source");
+      section.bindings = element.value ? [...retained, { kind: "entity", target_id: element.value, role: "weather_source" }] : retained;
+      this._render();
+      return;
+    }
+    if (element.dataset.weatherForecast !== undefined) {
+      const section = this._draft.screens[Number(element.dataset.screen)].sections[Number(element.dataset.section)];
+      section.forecast_type = element.value;
+      return;
+    }
     if (element.dataset.bindingName !== undefined) {
       const binding = this._bindingAt(element);
       const name = element.value.trim();

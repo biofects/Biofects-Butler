@@ -224,6 +224,30 @@ def test_binding_graph_type_round_trips() -> None:
     assert profile.as_dict()["screens"][0]["sections"][0]["bindings"][0]["role"] == "weather_source"
 
 
+def test_weather_forecast_type_round_trips() -> None:
+    """Weather sections retain a supported forecast mode."""
+    module = load_profiles_module()
+    payload = valid_profile()
+    section = payload["screens"][0]["sections"][0]
+    section["type"] = "weather"
+    section["forecast_type"] = "hourly"
+
+    profile = module.parse_dashboard_profile(payload)
+
+    assert profile.screens[0].sections[0].forecast_type == "hourly"
+    assert profile.as_dict()["screens"][0]["sections"][0]["forecast_type"] == "hourly"
+
+
+def test_weather_forecast_type_rejects_unknown_value() -> None:
+    """Weather forecast modes must match Home Assistant's API values."""
+    module = load_profiles_module()
+    payload = valid_profile()
+    payload["screens"][0]["sections"][0]["forecast_type"] = "weekly"
+
+    with pytest.raises(module.ProfileValidationError, match="forecast_type"):
+        module.parse_dashboard_profile(payload)
+
+
 def test_quick_command_button_round_trips() -> None:
     """Custom command appearance and service calls remain profile-owned."""
     module = load_profiles_module()

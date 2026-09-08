@@ -5,7 +5,9 @@ Biofects Butler is the Home Assistant integration for the Biofects Butler Androi
 ## Features
 
 - Administrator-managed Butler dashboard profiles and pages.
-- Grouped entity cards with configurable tap actions, calendars, weather, media, and service controls.
+- Grouped entity cards with configurable tap actions, calendars, media, and service controls.
+- Weather panels with a selectable Home Assistant weather provider and attribute-driven Daily, Hourly, or Twice Daily forecasts.
+- Android greetings based on Home Assistant's configured timezone.
 - Registration for up to two Free Android devices; private Paid evaluation builds report their edition and are not subject to the Free display limit.
 - A fixed Free assistant identity of `Biofects Butler`; the app and integration do not expose name editing.
 - Native Home Assistant OAuth metadata for the Android application.
@@ -20,7 +22,7 @@ Biofects Butler is the Home Assistant integration for the Biofects Butler Androi
 
 After setup, administrators can open **Butler Dashboards** from the Home Assistant sidebar.
 
-Android beta.12 requires integration version `0.1.0-beta.12` or newer. Update the integration and restart Home Assistant before connecting a beta.12 Free or Paid app.
+Android beta.13 requires integration version `0.1.0-beta.13` or newer. Update the integration and restart Home Assistant before connecting a beta.13 Free or Paid app.
 
 ## Manual installation
 
