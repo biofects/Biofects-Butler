@@ -178,6 +178,17 @@ def test_legacy_holographic_theme_is_accepted_but_not_serialized() -> None:
     assert "theme" not in profile.as_dict()
 
 
+def test_robot_butler_theme_is_accepted() -> None:
+    """The animated robot presentation can be assigned as a display theme."""
+    module = load_profiles_module()
+    payload = valid_profile()
+    payload["theme"] = "robot_butler"
+
+    profile = module.parse_dashboard_profile(payload)
+
+    assert profile.theme == "robot_butler"
+
+
 def test_migrates_v0_without_mutating_source() -> None:
     """Known historical names migrate to canonical v1 before validation."""
     module = load_profiles_module()

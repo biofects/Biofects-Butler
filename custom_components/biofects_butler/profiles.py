@@ -50,7 +50,7 @@ POPUP_STYLES = frozenset({"standard", "projector"})
 GRAPH_TYPES = frozenset({"auto", "line", "bars", "gauge", "none"})
 CALENDAR_INITIAL_VIEWS = frozenset({"dayGridMonth", "listWeek"})
 WEATHER_FORECAST_TYPES = frozenset({"daily", "hourly", "twice_daily"})
-THEMES = frozenset({"butler_neon", "holographic_interface"})
+THEMES = frozenset({"butler_neon", "holographic_interface", "robot_butler"})
 
 _SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _ENTITY_ID_PATTERN = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
