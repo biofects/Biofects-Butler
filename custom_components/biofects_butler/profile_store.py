@@ -183,9 +183,12 @@ class DashboardProfileStore:
         display_themes = stored.get("display_themes")
         if isinstance(display_themes, Mapping):
             valid_themes = {
-                display_id: theme
+                display_id: (
+                    "holographic_interface" if theme == "robot_butler" else theme
+                )
                 for display_id, theme in display_themes.items()
-                if display_id in self._displays and theme in THEMES
+                if display_id in self._displays
+                and (theme in THEMES or theme == "robot_butler")
             }
             self._display_themes = valid_themes
             if dict(display_themes) != valid_themes:

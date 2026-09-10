@@ -50,7 +50,7 @@ POPUP_STYLES = frozenset({"standard", "projector"})
 GRAPH_TYPES = frozenset({"auto", "line", "bars", "gauge", "none"})
 CALENDAR_INITIAL_VIEWS = frozenset({"dayGridMonth", "listWeek"})
 WEATHER_FORECAST_TYPES = frozenset({"daily", "hourly", "twice_daily"})
-THEMES = frozenset({"butler_neon", "holographic_interface", "robot_butler"})
+THEMES = frozenset({"butler_neon", "holographic_interface"})
 
 _SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _ENTITY_ID_PATTERN = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
@@ -140,16 +140,20 @@ class DashboardProfile:
     default_screen_id: str
     screens: tuple[ProfileScreen, ...]
     theme: str = "butler_neon"
+    greeting_weather_entity_id: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible wire representation."""
-        return {
+        data = {
             "schema_version": self.schema_version,
             "profile_id": self.profile_id,
             "name": self.name,
             "default_screen_id": self.default_screen_id,
             "screens": [_screen_as_dict(screen) for screen in self.screens],
         }
+        if self.greeting_weather_entity_id is not None:
+            data["greeting_weather_entity_id"] = self.greeting_weather_entity_id
+        return data
 
 
 def _screen_as_dict(screen: ProfileScreen) -> dict[str, Any]:
@@ -167,7 +171,7 @@ def parse_dashboard_profile(payload: Mapping[str, Any]) -> DashboardProfile:
     _keys(
         data,
         {"schema_version", "profile_id", "name", "default_screen_id", "screens"},
-        {"theme"},
+        {"theme", "greeting_weather_entity_id"},
         "profile",
     )
     if data["schema_version"] != DASHBOARD_PROFILE_SCHEMA_VERSION:
@@ -195,6 +199,16 @@ def parse_dashboard_profile(payload: Mapping[str, Any]) -> DashboardProfile:
                         f"navigate action references unknown screen {action.target_id!r}"
                     )
 
+    greeting_weather_entity_id = (
+        _entity_id(data["greeting_weather_entity_id"], "profile.greeting_weather_entity_id")
+        if data.get("greeting_weather_entity_id") is not None
+        else None
+    )
+    if greeting_weather_entity_id is not None and not greeting_weather_entity_id.startswith("weather."):
+        raise ProfileValidationError(
+            "profile.greeting_weather_entity_id must identify a weather entity"
+        )
+
     return DashboardProfile(
         schema_version=DASHBOARD_PROFILE_SCHEMA_VERSION,
         profile_id=_slug(data["profile_id"], "profile.profile_id"),
@@ -202,6 +216,7 @@ def parse_dashboard_profile(payload: Mapping[str, Any]) -> DashboardProfile:
         default_screen_id=default_screen_id,
         screens=screens,
         theme=_choice(data.get("theme", "butler_neon"), THEMES, "profile.theme"),
+        greeting_weather_entity_id=greeting_weather_entity_id,
     )
 
 

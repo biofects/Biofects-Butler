@@ -7,8 +7,9 @@ Biofects Butler is the Home Assistant integration for the Biofects Butler Androi
 - Administrator-managed Butler dashboard profiles and pages.
 - Grouped entity cards with configurable tap actions, calendars, media, and service controls.
 - Weather panels with a selectable Home Assistant weather provider and attribute-driven Daily, Hourly, or Twice Daily forecasts.
+- Profile-selectable greeting weather with a concise current temperature and forecast summary.
 - Android greetings based on Home Assistant's configured timezone.
-- Three dashboard themes: Butler Neon, Holographic Interface, and Robot Butler.
+- Two dashboard themes: Butler Neon and Holographic Interface.
 - Registration for up to two Free Android devices; private Paid evaluation builds report their edition and are not subject to the Free display limit.
 - A fixed Free assistant identity of `Biofects Butler`; the app and integration do not expose name editing.
 - Native Home Assistant OAuth metadata for the Android application.
@@ -23,7 +24,7 @@ Biofects Butler is the Home Assistant integration for the Biofects Butler Androi
 
 After setup, administrators can open **Butler Dashboards** from the Home Assistant sidebar.
 
-Android beta.17 requires integration version `0.1.0-beta.17` or newer for Robot Butler theme support. Update the integration and restart Home Assistant before connecting a beta.17 Free or Paid app.
+Android beta.18 requires integration version `0.1.0-beta.19` or newer for greeting weather selection and automatic migration of retired Robot assignments to Holographic Interface.
 
 ## Manual installation
 

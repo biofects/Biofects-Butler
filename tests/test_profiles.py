@@ -178,15 +178,36 @@ def test_legacy_holographic_theme_is_accepted_but_not_serialized() -> None:
     assert "theme" not in profile.as_dict()
 
 
-def test_robot_butler_theme_is_accepted() -> None:
-    """The animated robot presentation can be assigned as a display theme."""
+def test_robot_butler_theme_is_rejected() -> None:
+    """The retired Robot presentation cannot be assigned to a display."""
     module = load_profiles_module()
     payload = valid_profile()
     payload["theme"] = "robot_butler"
 
+    with pytest.raises(module.ProfileValidationError, match="profile.theme"):
+        module.parse_dashboard_profile(payload)
+
+
+def test_greeting_weather_entity_round_trips() -> None:
+    """A profile can select a Home Assistant weather source for its greeting."""
+    module = load_profiles_module()
+    payload = valid_profile()
+    payload["greeting_weather_entity_id"] = "weather.home"
+
     profile = module.parse_dashboard_profile(payload)
 
-    assert profile.theme == "robot_butler"
+    assert profile.greeting_weather_entity_id == "weather.home"
+    assert profile.as_dict() == payload
+
+
+def test_greeting_weather_entity_rejects_other_domains() -> None:
+    """Greeting weather must come from a Home Assistant weather provider."""
+    module = load_profiles_module()
+    payload = valid_profile()
+    payload["greeting_weather_entity_id"] = "sensor.outdoor_temperature"
+
+    with pytest.raises(module.ProfileValidationError, match="weather entity"):
+        module.parse_dashboard_profile(payload)
 
 
 def test_migrates_v0_without_mutating_source() -> None:

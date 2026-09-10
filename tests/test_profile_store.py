@@ -106,6 +106,30 @@ def test_load_recovers_valid_profiles_and_assignments(store_module) -> None:
     )
 
 
+def test_load_migrates_robot_theme_to_holographic(store_module) -> None:
+    """Retired Robot assignments remain usable with the Holographic theme."""
+    FakeStore.loaded = {
+        "profiles": [store_module.DEFAULT_PROFILE_PAYLOAD],
+        "displays": [{
+            "display_id": "wall-tablet",
+            "name": "Wall Tablet",
+            "model": "UniFi Connect",
+            "viewport_class": "expanded",
+            "renderer_schema_version": 1,
+        }],
+        "assignments": {"wall-tablet": "default"},
+        "display_themes": {"wall-tablet": "robot_butler"},
+    }
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+
+    asyncio.run(store.async_load())
+
+    assert store.display_themes == {"wall-tablet": "holographic_interface"}
+    assert FakeStore.saved["display_themes"] == {
+        "wall-tablet": "holographic_interface"
+    }
+
+
 def test_upsert_and_assignment_persist_complete_snapshot(store_module) -> None:
     """Profile and assignment changes save canonical complete snapshots."""
     store = store_module.DashboardProfileStore(SimpleNamespace())

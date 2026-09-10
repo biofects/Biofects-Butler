@@ -163,9 +163,13 @@ class BiofectsButlerPanel extends HTMLElement {
   _profileEditor() {
     const profile = this._draft;
     const activeScreen = profile.screens.find((screen) => screen.screen_id === this._activeScreenId) || profile.screens[0];
+    const weatherEntities = Object.values(this._hass?.states || {})
+      .filter((state) => state.entity_id.startsWith("weather."))
+      .sort((left, right) => (left.attributes.friendly_name || left.entity_id).localeCompare(right.attributes.friendly_name || right.entity_id));
     return `
       <div class="profile-bar">
         <div class="field grow"><label>PROFILE NAME</label><input data-profile-field="name" value="${escapeHtml(profile.name)}"></div>
+        <div class="field grow"><label>GREETING WEATHER</label><select data-greeting-weather><option value="">No weather summary</option>${weatherEntities.map((state) => `<option value="${escapeHtml(state.entity_id)}" ${state.entity_id === profile.greeting_weather_entity_id ? "selected" : ""}>${escapeHtml(state.attributes.friendly_name || state.entity_id)}</option>`).join("")}</select></div>
         <div class="field"><label>START SCREEN</label><div class="fixed-value">Home</div></div>
         <button class="danger" title="Delete profile" data-action="delete-profile" ${profile.profile_id === "default" ? "disabled" : ""}><ha-icon icon="mdi:delete-outline"></ha-icon>Delete Profile</button>
         <button class="primary" data-action="save" ${this._saving ? "disabled" : ""}>${this._saving ? "Saving..." : "Save Profile"}</button>
@@ -468,7 +472,7 @@ class BiofectsButlerPanel extends HTMLElement {
     return `<div class="assignments"><h2>Displays</h2>${displays.map((display) => {
       const assigned = this._snapshot.assignments?.[display.display_id] || "default";
       const theme = this._snapshot.display_themes?.[display.display_id] || "butler_neon";
-      return `<div class="display"><span><strong>${escapeHtml(display.name)}</strong><small>${escapeHtml(display.model)} / ${escapeHtml(display.viewport_class)}</small><small>${escapeHtml(display.display_id)}</small></span><label>Dashboard<select data-display-profile="${escapeHtml(display.display_id)}">${profiles.map((profile) => `<option value="${escapeHtml(profile.profile_id)}" ${profile.profile_id === assigned ? "selected" : ""}>${escapeHtml(profile.name)}</option>`).join("")}</select></label><label>Theme<select data-display-theme="${escapeHtml(display.display_id)}"><option value="butler_neon" ${theme === "butler_neon" ? "selected" : ""}>Butler Neon</option><option value="holographic_interface" ${theme === "holographic_interface" ? "selected" : ""}>Holographic Interface</option><option value="robot_butler" ${theme === "robot_butler" ? "selected" : ""}>Robot Butler</option></select></label><button class="icon danger" title="Delete display" data-action="delete-display" data-display-id="${escapeHtml(display.display_id)}" data-display-name="${escapeHtml(display.name)}"><ha-icon icon="mdi:delete-outline"></ha-icon></button></div>`;
+      return `<div class="display"><span><strong>${escapeHtml(display.name)}</strong><small>${escapeHtml(display.model)} / ${escapeHtml(display.viewport_class)}</small><small>${escapeHtml(display.display_id)}</small></span><label>Dashboard<select data-display-profile="${escapeHtml(display.display_id)}">${profiles.map((profile) => `<option value="${escapeHtml(profile.profile_id)}" ${profile.profile_id === assigned ? "selected" : ""}>${escapeHtml(profile.name)}</option>`).join("")}</select></label><label>Theme<select data-display-theme="${escapeHtml(display.display_id)}"><option value="butler_neon" ${theme === "butler_neon" ? "selected" : ""}>Butler Neon</option><option value="holographic_interface" ${theme === "holographic_interface" ? "selected" : ""}>Holographic Interface</option></select></label><button class="icon danger" title="Delete display" data-action="delete-display" data-display-id="${escapeHtml(display.display_id)}" data-display-name="${escapeHtml(display.name)}"><ha-icon icon="mdi:delete-outline"></ha-icon></button></div>`;
     }).join("")}</div>`;
   }
 
@@ -692,6 +696,11 @@ class BiofectsButlerPanel extends HTMLElement {
       return;
     }
     if (!this._draft) return;
+    if (element.dataset.greetingWeather !== undefined) {
+      if (element.value) this._draft.greeting_weather_entity_id = element.value;
+      else delete this._draft.greeting_weather_entity_id;
+      return;
+    }
     if (element.dataset.weatherEntity !== undefined) {
       const section = this._draft.screens[Number(element.dataset.screen)].sections[Number(element.dataset.section)];
       const retained = (section.bindings || []).filter((binding) => !binding.target_id?.startsWith("weather.") && binding.role !== "weather_source");
