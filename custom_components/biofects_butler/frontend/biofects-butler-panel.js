@@ -46,6 +46,8 @@ class BiofectsButlerPanel extends HTMLElement {
     this._loading = false;
     this._saving = false;
     this._activeScreenId = null;
+    this._activeWorkspace = "screens";
+    this._activeSectionSlot = null;
     this._editorDialog = null;
     this._iconBrowser = null;
     this._mdiIcons = [];
@@ -121,64 +123,54 @@ class BiofectsButlerPanel extends HTMLElement {
     this.shadowRoot.innerHTML = `
       <style>${this._styles()}</style>
       <main>
-        <header>
+        <header class="page-header">
           <div>
             <p class="eyebrow">BIOFECTS BUTLER / CONFIGURATION</p>
-            <h1>Dashboard Profiles</h1>
-          </div>
-          <div class="header-actions">
-            <button data-action="import">Import</button>
-            <button data-action="export" ${!this._draft ? "disabled" : ""}>Export</button>
-            <input id="import-file" type="file" accept="application/json" hidden>
+            <h1>Butler Configuration</h1>
           </div>
         </header>
         ${this._message ? `<div class="notice">${escapeHtml(this._message)}</div>` : ""}
-        <section class="workspace">
-          <aside>
-            <label>PROFILE</label>
-            <div class="profile-choices">${profileButtons}</div>
-            <details class="profile-select-fallback"><summary>Compact profile menu</summary><select data-action="select-profile">${profileOptions}</select></details>
-            <div class="button-row">
-              <button data-action="new">New</button>
-              <button data-action="duplicate" ${!this._draft ? "disabled" : ""}>Duplicate</button>
-            </div>
-            <div class="dashboard-import">
-              <h2>Start From HA Dashboard</h2>
-              <select id="lovelace-dashboard">${dashboards.map((dashboard) => `<option value="${escapeHtml(dashboard.path)}">${escapeHtml(dashboard.title)}</option>`).join("")}</select>
-              <button data-action="import-lovelace" ${dashboards.length ? "" : "disabled"}>Create Draft</button>
-            </div>
-            ${this._conversationBackends()}
-            ${this._displayAssignments(displays, profiles)}
-          </aside>
-          <div class="editor">
-            ${this._draft ? this._profileEditor() : "<div class='empty'>No dashboard profile is available.</div>"}
-          </div>
+        <nav class="task-tabs" aria-label="Configuration sections">
+          ${[["profiles", "Profiles", "mdi:account-multiple-outline"], ["screens", "Screens", "mdi:view-dashboard-outline"], ["displays", "Displays", "mdi:monitor-cellphone"], ["integrations", "Integrations", "mdi:puzzle-outline"], ["advanced", "Advanced", "mdi:cog-outline"]].map(([id, title, icon]) => `<button class="task-tab ${this._activeWorkspace === id ? "selected" : ""}" data-action="select-workspace" data-workspace="${id}"><ha-icon icon="${icon}"></ha-icon>${title}</button>`).join("")}
+        </nav>
+        ${this._draft ? `<div class="profile-context"><label>EDITING PROFILE<select data-action="select-profile">${profileOptions}</select></label><span>${escapeHtml(this._draft.screens.length)} screens</span><button class="primary" data-action="save" ${this._saving ? "disabled" : ""}>${this._saving ? "Saving..." : "Save Profile"}</button></div>` : ""}
+        <section class="task-workspace">
+          ${this._workspaceEditor({ profiles, displays, dashboards, profileButtons })}
         </section>
+        <input id="import-file" type="file" accept="application/json" hidden>
       </main>
       <datalist id="mdi-icon-options">${this._mdiIcons.map((icon) => `<option value="${escapeHtml(icon)}"></option>`).join("")}</datalist>`;
     this._wireImport();
     this._updateSelectors();
   }
 
-  _profileEditor() {
+  _workspaceEditor({ profiles, displays, dashboards, profileButtons }) {
+    if (this._activeWorkspace === "profiles") return this._profilesWorkspace(profileButtons);
+    if (this._activeWorkspace === "displays") return this._displayAssignments(displays, profiles);
+    if (this._activeWorkspace === "integrations") return this._conversationBackends();
+    if (this._activeWorkspace === "advanced") return this._advancedWorkspace(dashboards);
+    return this._draft ? this._profileEditor() : "<div class='empty'>Create a profile before adding screens.</div>";
+  }
+
+  _profilesWorkspace(profileButtons) {
     const profile = this._draft;
-    const activeScreen = profile.screens.find((screen) => screen.screen_id === this._activeScreenId) || profile.screens[0];
     const weatherEntities = Object.values(this._hass?.states || {})
       .filter((state) => state.entity_id.startsWith("weather."))
       .sort((left, right) => (left.attributes.friendly_name || left.entity_id).localeCompare(right.attributes.friendly_name || right.entity_id));
+    return `<section class="settings-page"><div class="settings-heading"><div><p class="eyebrow">PROFILES</p><h2>Dashboard profiles</h2><p>Choose who and what this dashboard is configured for.</p></div><div class="button-row"><button data-action="new">New profile</button><button data-action="duplicate" ${profile ? "" : "disabled"}>Duplicate</button></div></div><div class="profiles-layout"><div class="profile-list"><label>AVAILABLE PROFILES</label><div class="profile-choices">${profileButtons}</div></div>${profile ? `<div class="profile-settings"><div class="field"><label>PROFILE NAME</label><input data-profile-field="name" value="${escapeHtml(profile.name)}"></div><div class="field"><label>GREETING WEATHER</label><select data-greeting-weather><option value="">No weather summary</option>${weatherEntities.map((state) => `<option value="${escapeHtml(state.entity_id)}" ${state.entity_id === profile.greeting_weather_entity_id ? "selected" : ""}>${escapeHtml(state.attributes.friendly_name || state.entity_id)}</option>`).join("")}</select></div><div class="field"><label>START SCREEN</label><div class="fixed-value">Home</div></div><button class="danger profile-delete" data-action="delete-profile" ${profile.profile_id === "default" ? "disabled" : ""}><ha-icon icon="mdi:delete-outline"></ha-icon>Delete profile</button></div>` : "<div class='empty'>No profile selected.</div>"}</div></section>`;
+  }
+
+  _advancedWorkspace(dashboards) {
+    return `<section class="settings-page"><div class="settings-heading"><div><p class="eyebrow">ADVANCED</p><h2>Import and maintenance</h2><p>Create from Home Assistant or move profile definitions between systems.</p></div></div><div class="advanced-grid"><article><h2>Start from HA dashboard</h2><p>Import a Lovelace dashboard as a new Butler draft.</p><select id="lovelace-dashboard">${dashboards.map((dashboard) => `<option value="${escapeHtml(dashboard.path)}">${escapeHtml(dashboard.title)}</option>`).join("")}</select><button data-action="import-lovelace" ${dashboards.length ? "" : "disabled"}>Create draft</button></article><article><h2>Profile file</h2><p>Import or export the selected profile as JSON.</p><div class="button-row"><button data-action="import">Import</button><button data-action="export" ${this._draft ? "" : "disabled"}>Export</button></div></article></div></section>`;
+  }
+
+  _profileEditor() {
+    const profile = this._draft;
+    const activeScreen = profile.screens.find((screen) => screen.screen_id === this._activeScreenId) || profile.screens[0];
     return `
-      <div class="profile-bar">
-        <div class="field grow"><label>PROFILE NAME</label><input data-profile-field="name" value="${escapeHtml(profile.name)}"></div>
-        <div class="field grow"><label>GREETING WEATHER</label><select data-greeting-weather><option value="">No weather summary</option>${weatherEntities.map((state) => `<option value="${escapeHtml(state.entity_id)}" ${state.entity_id === profile.greeting_weather_entity_id ? "selected" : ""}>${escapeHtml(state.attributes.friendly_name || state.entity_id)}</option>`).join("")}</select></div>
-        <div class="field"><label>START SCREEN</label><div class="fixed-value">Home</div></div>
-        <button class="danger" title="Delete profile" data-action="delete-profile" ${profile.profile_id === "default" ? "disabled" : ""}><ha-icon icon="mdi:delete-outline"></ha-icon>Delete Profile</button>
-        <button class="primary" data-action="save" ${this._saving ? "disabled" : ""}>${this._saving ? "Saving..." : "Save Profile"}</button>
-      </div>
-      <div class="screen-tabs">
+      <div class="screen-workspace"><aside class="screen-list"><div class="screen-list-heading"><label>SCREENS</label><button class="add-screen-tab" title="Add dashboard" data-action="add-screen">+</button></div>
         ${profile.screens.map((screen) => `<button class="screen-tab ${screen.screen_id === activeScreen.screen_id ? "selected" : ""}" data-action="select-screen" data-screen-id="${escapeHtml(screen.screen_id)}">${escapeHtml(screen.title)}</button>`).join("")}
-        <button class="add-screen-tab" title="Add dashboard" data-action="add-screen">+</button>
-      </div>
-      <div class="screens">${this._screenEditor(activeScreen, profile.screens.indexOf(activeScreen))}</div>
+      </aside><div class="screens">${this._screenEditor(activeScreen, profile.screens.indexOf(activeScreen))}</div></div>
       ${this._renderEditorDialog()}`;
   }
 
@@ -195,6 +187,9 @@ class BiofectsButlerPanel extends HTMLElement {
   _screenEditor(screen, screenIndex) {
     if (screen.screen_id === "home") this._ensureHomeSidebarBlueprint(screen);
     const missingSlots = COMPOSITIONS[screen.composition].filter((slot) => !screen.sections.some((section) => section.slot === slot));
+    const activeSection = screen.sections.find((section) => section.slot === this._activeSectionSlot) || screen.sections[0];
+    const activeSectionIndex = activeSection ? screen.sections.indexOf(activeSection) : -1;
+    this._activeSectionSlot = activeSection?.slot || null;
     return `
       <article class="screen-card">
         <div class="screen-head canvas-toolbar">
@@ -204,8 +199,9 @@ class BiofectsButlerPanel extends HTMLElement {
         </div>
         <div class="home-mode-note"><ha-icon icon="${screen.screen_id === "home" ? "mdi:home-edit" : "mdi:tune-variant"}"></ha-icon><span><strong>${screen.screen_id === "home" ? "Concept Home panels" : "Native Butler controls"}</strong><small>${screen.screen_id === "home" ? "Add, remove, resize, and configure panels while retaining Butler's native Home design." : "Entity controls expand into a detailed Butler control panel when tapped."}</small></span></div>
         ${screen.screen_id === "home" ? "" : `<label class="layout-label">DASHBOARD TEMPLATE</label><div class="layout-choices">${Object.entries(LAYOUTS).map(([composition, layout]) => this._layoutChoice(composition, layout, screen.composition, screenIndex)).join("")}</div>`}
-        <div class="panel-toolbar"><strong>ADD PANEL</strong>${missingSlots.map((slot) => `<button data-action="add-section" data-screen="${screenIndex}" data-slot="${slot}"><ha-icon icon="mdi:plus"></ha-icon>${escapeHtml(this._slotLabel(slot, screen))}</button>`).join("") || `<small>All panel positions are in use.</small>`}</div>
-        <div class="slot-editor ${screen.composition}">${screen.sections.map((section, index) => this._sectionEditor(section, screen, screenIndex, index)).join("") || `<div class="empty-panels">Add a panel to build this dashboard.</div>`}</div>
+        <div class="panel-picker"><div class="panel-picker-heading"><strong>PANELS</strong><small>Select one to edit</small></div><div class="panel-picker-list">${screen.sections.map((section) => `<button class="panel-picker-item ${section === activeSection ? "selected" : ""}" data-action="select-panel" data-panel-slot="${escapeHtml(section.slot)}"><ha-icon icon="mdi:view-grid-outline"></ha-icon><span>${escapeHtml(section.title || this._slotLabel(section.slot, screen))}</span><small>${escapeHtml(label(section.type))}</small></button>`).join("")}</div></div>
+        <details class="add-panel"><summary>Add panel</summary><div class="panel-toolbar">${missingSlots.map((slot) => `<button data-action="add-section" data-screen="${screenIndex}" data-slot="${slot}"><ha-icon icon="mdi:plus"></ha-icon>${escapeHtml(this._slotLabel(slot, screen))}</button>`).join("") || `<small>All panel positions are in use.</small>`}</div></details>
+        <div class="focused-panel-editor">${activeSection ? this._sectionEditor(activeSection, screen, screenIndex, activeSectionIndex) : `<div class="empty-panels">Add a panel to build this dashboard.</div>`}</div>
       </article>`;
   }
 
@@ -576,6 +572,11 @@ class BiofectsButlerPanel extends HTMLElement {
       this._selectProfile(button.dataset.profileId);
       return;
     }
+    if (action === "select-workspace") {
+      this._activeWorkspace = button.dataset.workspace;
+      this._render();
+      return;
+    }
     if (!this._draft) return;
     const structuralHomeActions = new Set(["select-layout", "remove-screen", "move-screen"]);
     const targetScreen = this._draft.screens[Number(button.dataset.screen ?? button.dataset.index)];
@@ -585,7 +586,11 @@ class BiofectsButlerPanel extends HTMLElement {
     if (action === "remove-sidebar-item") this._draft.screens[Number(button.dataset.screen)].sections[Number(button.dataset.section)].actions.splice(Number(button.dataset.index), 1);
     if (action === "move-sidebar-item") this._moveSidebarItem(Number(button.dataset.screen), Number(button.dataset.section), Number(button.dataset.index), Number(button.dataset.direction));
     if (action === "move-sidebar-across") this._moveSidebarAcross(Number(button.dataset.screen), Number(button.dataset.section), Number(button.dataset.index), button.dataset.destination);
-    if (action === "select-screen") this._activeScreenId = button.dataset.screenId;
+    if (action === "select-screen") {
+      this._activeScreenId = button.dataset.screenId;
+      this._activeSectionSlot = null;
+    }
+    if (action === "select-panel") this._activeSectionSlot = button.dataset.panelSlot;
     if (action === "select-layout") this._applyComposition(Number(button.dataset.screen), button.dataset.composition);
     if (action === "remove-screen") this._removeScreen(Number(button.dataset.index));
     if (action === "move-screen") this._move(this._draft.screens, Number(button.dataset.index), Number(button.dataset.direction));
@@ -1255,6 +1260,9 @@ class BiofectsButlerPanel extends HTMLElement {
       .fixed-value{display:flex;align-items:center;min-height:38px;padding:8px 12px;border:1px solid var(--line);color:var(--cyan)}.home-mode-note{display:flex;align-items:center;gap:10px;margin:12px 0;padding:10px;border:1px solid #267680;background:#0a1d22}.home-mode-note ha-icon{color:var(--cyan)}.home-mode-note strong,.home-mode-note small{display:block}.home-mode-note strong{font-size:11px;color:var(--cyan)}.home-mode-note small{margin-top:3px;font-size:9px;color:var(--muted)}.page-render-settings{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:10px;margin:12px 0;padding:12px;border:1px solid #143c42;background:#071014}.scale-field label span{float:right;color:var(--cyan)}.scale-field input{padding:0}.ha-cards-preview{display:grid;place-items:center;align-content:center;gap:10px;min-height:440px;border:1px dashed #267680;background:rgba(2,10,13,.82);text-align:center}.ha-cards-preview ha-icon{color:var(--cyan);--mdc-icon-size:58px}.ha-cards-preview strong{color:var(--cyan);font-size:16px}.ha-cards-preview span{color:#d8f7f7;font-size:12px}.ha-cards-preview small{max-width:420px;color:var(--muted);font-size:10px}.page-link-card{display:grid;grid-template-columns:28px minmax(0,1fr) auto;align-items:center;gap:8px;width:100%;padding:9px;text-align:left;border-color:#267680;background:#0a1d22}.page-link-card ha-icon{color:var(--cyan);--mdc-icon-size:21px}.page-link-card span{min-width:0}.page-link-card strong,.page-link-card small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.page-link-card strong{color:#d8f7f7;font-size:10px}.page-link-card small{margin-top:2px;color:var(--muted);font-size:7px}.page-link-card em{color:var(--cyan);font-size:7px;font-style:normal}.entity-picker-search{display:grid;grid-template-columns:24px minmax(0,1fr);align-items:center;gap:8px;margin:0 16px 8px;padding:0 10px;border:1px solid var(--line);background:#061014}.entity-picker-search:focus-within{border-color:var(--cyan)}.entity-picker-search ha-icon{color:var(--cyan);--mdc-icon-size:20px}.entity-picker-search input{min-height:44px;padding:8px 0;border:0;background:transparent;outline:0}.entity-picker-summary{padding:0 16px 8px;color:var(--muted);font-size:9px}.entity-picker-list{display:grid;max-height:min(480px,55vh);overflow:auto;border-top:1px solid #143c42}.entity-picker-option{display:grid;grid-template-columns:28px minmax(0,1fr) auto;align-items:center;gap:10px;width:100%;min-height:54px;padding:8px 16px;border:0;border-bottom:1px solid #143c42;text-align:left}.entity-picker-option:hover{background:#0b2024}.entity-picker-option[hidden]{display:none}.entity-picker-option ha-icon{color:var(--cyan);--mdc-icon-size:23px}.entity-picker-option span{min-width:0}.entity-picker-option strong,.entity-picker-option small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.entity-picker-option strong{font-size:11px}.entity-picker-option small{margin-top:3px;color:var(--muted);font-size:9px}.entity-picker-option em{max-width:110px;overflow:hidden;text-overflow:ellipsis;color:#82c8cc;font-size:9px;font-style:normal;white-space:nowrap}.entity-picker-empty{padding:28px 16px;text-align:center;color:var(--muted);font-size:11px}.entity-picker-empty[hidden]{display:none}
       @container(max-width:700px){.entity-card{grid-template-columns:15px 26px minmax(0,1fr) auto 30px}.tap-mode{display:none}.editor-modal{padding:10px}.screen-tabs{position:sticky;top:0;z-index:5;background:#050b0e}.entity-picker-option{grid-template-columns:26px minmax(0,1fr)}.entity-picker-option em{display:none}.page-render-settings{grid-template-columns:1fr}.ha-cards-preview{min-height:280px}}
       .preview-stage.radial_command_overview{grid-template-columns:1fr 1fr 1.6fr 1fr;grid-template-rows:1fr 1fr;grid-template-areas:"overview overview reactor media" "left_menu right_menu reactor events"}.preview-stage.radial_command_overview .slot-overview{grid-area:overview}.preview-stage.radial_command_overview .slot-left_menu{grid-area:left_menu}.preview-stage.radial_command_overview .slot-reactor{grid-area:reactor}.preview-stage.radial_command_overview .slot-right_menu{grid-area:right_menu}.preview-stage.radial_command_overview .slot-media{grid-area:media}.preview-stage.radial_command_overview .slot-events{grid-area:events}
+      .page-header{margin-bottom:12px}.task-tabs{display:flex;gap:6px;overflow-x:auto;margin-bottom:12px;padding-bottom:2px;border-bottom:1px solid var(--line)}.task-tab{display:flex;align-items:center;gap:7px;min-width:120px;border-bottom:3px solid transparent}.task-tab ha-icon{--mdc-icon-size:18px}.task-tab.selected{color:#021012;background:var(--cyan);border-color:var(--cyan)}.profile-context{display:grid;grid-template-columns:minmax(220px,420px) 1fr auto;align-items:end;gap:12px;margin-bottom:16px;padding:10px 12px;border:1px solid var(--line);background:#071014}.profile-context label{margin:0}.profile-context select{margin-top:5px}.profile-context span{align-self:center;color:var(--muted);font-size:10px}.task-workspace{min-width:0}.settings-page,.assignments{padding:18px;border:1px solid var(--line);background:rgba(10,21,25,.94)}.settings-heading{display:flex;align-items:end;justify-content:space-between;gap:20px;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid #143c42}.settings-heading h2{margin:3px 0 5px;font-size:19px}.settings-heading p{color:var(--muted);font-size:10px}.profiles-layout{display:grid;grid-template-columns:minmax(220px,320px) minmax(0,1fr);gap:18px}.profile-list,.profile-settings,.advanced-grid article{padding:14px;border:1px solid #143c42;background:#071014}.profile-settings{display:grid;grid-template-columns:repeat(3,minmax(160px,1fr));gap:12px;align-items:end}.profile-delete{grid-column:1/-1;justify-self:start}.advanced-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.advanced-grid article h2{margin:0 0 6px}.advanced-grid article p{min-height:32px;margin-bottom:12px;color:var(--muted);font-size:10px}.advanced-grid article>button{width:100%;margin-top:8px}.screen-workspace{display:grid;grid-template-columns:190px minmax(0,1fr);gap:14px}.screen-list{align-self:start;padding:12px;border:1px solid var(--line);background:rgba(10,21,25,.94)}.screen-list-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}.screen-list-heading label{margin:0}.screen-list .screen-tab{display:block;width:100%;margin-bottom:6px;text-align:left}.panel-picker{margin:12px 0;padding:10px;border:1px solid #143c42;background:#071014}.panel-picker-heading{display:flex;align-items:baseline;gap:9px;margin-bottom:8px}.panel-picker-heading strong{color:var(--cyan);font-size:9px}.panel-picker-heading small{color:var(--muted);font-size:8px}.panel-picker-list{display:flex;gap:7px;overflow-x:auto;padding-bottom:2px}.panel-picker-item{display:grid;grid-template-columns:22px minmax(100px,1fr);grid-template-rows:auto auto;gap:2px 7px;min-width:150px;text-align:left}.panel-picker-item ha-icon{grid-row:1/3;align-self:center;color:var(--cyan);--mdc-icon-size:19px}.panel-picker-item span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.panel-picker-item small{color:var(--muted);font-size:7px}.panel-picker-item.selected{border-color:var(--cyan);background:#0b2024;color:var(--cyan)}.add-panel{margin-bottom:10px}.add-panel summary{cursor:pointer;color:var(--cyan);font-size:9px}.add-panel .panel-toolbar{margin-top:7px}.focused-panel-editor{min-height:420px;padding:12px;border:1px solid #143c42;background:rgba(2,10,13,.82)}.focused-panel-editor>.section-block{min-height:390px;border:1px solid var(--line);border-top:3px solid var(--cyan);padding:14px;background:rgba(7,17,21,.96)}.focused-panel-editor .slot-heading{align-items:end}.focused-panel-editor .entity-canvas{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px}.focused-panel-editor .drop-empty{grid-column:1/-1}.focused-panel-editor .quick-command-list{max-height:none}.focused-panel-editor .selected-entities{max-height:none}.backend-config{margin:0;padding:18px;border:1px solid var(--line);background:rgba(10,21,25,.94)}.backend-config h2{margin-top:0}
+      @container(max-width:900px){.profiles-layout,.screen-workspace,.advanced-grid{grid-template-columns:1fr}.screen-list{display:flex;gap:6px;overflow-x:auto}.screen-list-heading{min-width:90px}.screen-list .screen-tab{min-width:130px;margin:0}.profile-settings{grid-template-columns:1fr}.profile-context{grid-template-columns:1fr auto}.profile-context span{display:none}}
+      @container(max-width:600px){.task-tab{min-width:auto;flex:1;justify-content:center}.task-tab ha-icon{display:none}.profile-context{grid-template-columns:1fr}.focused-panel-editor{padding:6px}.focused-panel-editor .entity-canvas{grid-template-columns:1fr}.settings-heading{align-items:stretch;flex-direction:column}.settings-heading .button-row{width:100%}}
     `;
   }
 }

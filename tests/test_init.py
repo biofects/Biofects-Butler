@@ -110,7 +110,7 @@ def test_setup_registers_websocket_command(integration_module) -> None:
             "webcomponent_name": "biofects-butler-panel",
             "sidebar_title": "Butler Dashboards",
             "sidebar_icon": "mdi:monitor-dashboard",
-            "module_url": "/biofects_butler_static/biofects-butler-panel.js?v=57",
+            "module_url": "/biofects_butler_static/biofects-butler-panel.js?v=58",
             "require_admin": True,
         }
     ]
