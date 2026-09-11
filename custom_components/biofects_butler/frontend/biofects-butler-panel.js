@@ -2,18 +2,21 @@ const COMPOSITIONS = {
   radial_command_overview: ["overview", "left_menu", "reactor", "right_menu", "media", "events"],
   security_camera_board: ["status", "camera_primary", "camera_grid", "controls", "events"],
   focused_control: ["left_instrument", "core", "right_instrument", "footer"],
+  full_page: ["full_page"],
 };
 
 const LAYOUTS = {
   radial_command_overview: { name: "Command Center", description: "Overview, menus, assistant, media and events" },
   security_camera_board: { name: "Camera & Security", description: "Status, cameras, controls and events" },
   focused_control: { name: "Room Controls", description: "Large central controls with supporting panels" },
+  full_page: { name: "Full Page", description: "One panel fills the entire dashboard body" },
 };
 
 const SLOT_LABELS = {
   overview: "Overview", left_menu: "Left Commands", reactor: "Assistant", right_menu: "Right Commands", media: "Media", events: "Upcoming Events",
   status: "Security Overview", camera_primary: "Featured Camera", camera_grid: "Camera Strip", controls: "Controls", events: "Recent Events",
   left_instrument: "Left Panel", core: "Main Control", right_instrument: "Right Panel", footer: "Lower Panel",
+  full_page: "Full Page Panel",
 };
 
 const SECTION_TYPES = [
@@ -141,7 +144,15 @@ class BiofectsButlerPanel extends HTMLElement {
       </main>
       <datalist id="mdi-icon-options">${this._mdiIcons.map((icon) => `<option value="${escapeHtml(icon)}"></option>`).join("")}</datalist>`;
     this._wireImport();
+    this._clarifyPopupDetails();
     this._updateSelectors();
+  }
+
+  _clarifyPopupDetails() {
+    const heading = this.shadowRoot.querySelector(".attribute-picker h3");
+    if (!heading) return;
+    heading.textContent = "CARD + OPEN CONTROLS DETAILS";
+    heading.nextElementSibling.textContent = "Select up to 20 state attributes for the card and Open controls. With none selected, Open controls uses useful defaults for the entity type.";
   }
 
   _workspaceEditor({ profiles, displays, dashboards, profileButtons }) {
@@ -1253,7 +1264,7 @@ class BiofectsButlerPanel extends HTMLElement {
       @container(max-width:700px){main{padding:12px}.workspace{grid-template-columns:1fr}.profile-bar,.screen-head{flex-wrap:wrap}.card-options{grid-template-columns:1fr}.toggle-option{justify-content:flex-start}}
       .attribute-summary{color:var(--cyan)!important}.attribute-picker{margin-top:14px;padding-top:12px;border-top:1px solid #17434a}.attribute-picker h3{margin:0;color:var(--cyan);font-size:11px}.attribute-picker>p{margin:4px 0 9px;color:var(--muted);font-size:9px}.attribute-options{display:grid;grid-template-columns:1fr 1fr;gap:6px;max-height:250px;overflow:auto}.attribute-option{display:grid!important;grid-template-columns:20px minmax(0,1fr);grid-template-rows:auto auto;gap:1px 7px;margin:0!important;padding:7px;border:1px solid #245c63;background:#071115}.attribute-option input{grid-row:1/3;width:16px;min-height:16px;margin:0;align-self:center}.attribute-option span{color:#d8f7f7;font-size:9px}.attribute-option small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px}
       .screen-tabs{display:flex;gap:6px;align-items:center;overflow-x:auto;padding:8px 0 12px}.screen-tab,.add-screen-tab{min-height:36px;white-space:nowrap}.screen-tab.selected{background:var(--cyan);border-color:var(--cyan);color:#021012}.add-screen-tab{width:38px;padding:0;font-size:20px;color:var(--cyan)}
-      .screen-card{padding:14px}.canvas-toolbar{background:#071014;padding:10px;border:1px solid #143c42}.canvas-toolbar .field{max-width:440px}.layout-choices{margin-bottom:12px}.layout-choice{border-width:1px}.layout-choice.selected{box-shadow:inset 4px 0 0 var(--cyan)}
+      .mini-layout.full_page{grid-template-columns:1fr}.screen-card{padding:14px}.canvas-toolbar{background:#071014;padding:10px;border:1px solid #143c42}.canvas-toolbar .field{max-width:440px}.layout-choices{margin-bottom:12px}.layout-choice{border-width:1px}.layout-choice.selected{box-shadow:inset 4px 0 0 var(--cyan)}
       .slot-editor>.section-block{display:flex;flex-direction:column}.slot-heading{min-height:44px;margin:0 0 8px;padding-bottom:7px;border-bottom:1px solid #17434a}.slot-heading label{min-width:0;flex:1;margin:0}.slot-heading label span{display:block;margin-bottom:3px;color:var(--muted);font-size:7px;text-align:left}.slot-heading label input{min-height:28px;padding:4px 6px;color:var(--cyan);font-size:10px}.region-add{width:28px;min-height:28px;padding:0;border-color:#267680;color:var(--cyan);font-size:18px}.panel-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:7px;margin:12px 0 4px;padding:9px;border:1px solid #143c42;background:#071014}.panel-toolbar strong{margin-right:4px;color:var(--cyan);font-size:9px}.panel-toolbar button{display:flex;align-items:center;gap:5px;min-height:32px;padding:5px 8px;font-size:8px}.panel-toolbar button ha-icon{--mdc-icon-size:15px}.panel-toolbar small{color:var(--muted);font-size:8px}.panel-controls{display:flex;gap:5px}.panel-controls button{min-height:28px;padding:3px 6px}.panel-height{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:7px}.panel-height.selected{border-color:var(--cyan);color:var(--cyan);background:#0b2024}.panel-height ha-icon,.panel-controls .icon ha-icon{--mdc-icon-size:15px}.panel-controls .icon{width:28px}.empty-panels{display:grid;place-items:center;grid-column:1/-1;min-height:220px;color:var(--muted);border:1px dashed #28626a}
       .entity-canvas{flex:1}.entity-card{grid-template-columns:17px 28px minmax(0,1fr) auto auto 30px;padding:7px;gap:7px}.entity-card ha-icon{--mdc-icon-size:22px}.entity-copy strong{font-size:10px}.tap-mode{color:#73b7bb;font-size:7px;border:1px solid #245c63;padding:3px 5px}.card-settings,.live-toggle{display:grid;place-items:center;width:30px;min-height:30px;padding:0}.card-settings ha-icon,.live-toggle ha-icon{--mdc-icon-size:17px}.live-toggle.is-on{color:#021012;background:var(--cyan);border-color:var(--cyan)}.drop-empty{width:100%;min-height:92px;border:1px dashed #28626a;background:transparent;color:var(--muted);display:grid;place-items:center;align-content:center;gap:7px}.drop-empty ha-icon{color:var(--cyan);--mdc-icon-size:28px}.slot-camera_primary .drop-empty{min-height:180px}.slot-reactor .drop-empty,.slot-core .drop-empty{border-radius:50%;width:min(180px,80%);aspect-ratio:1;justify-self:center;align-self:center;background:radial-gradient(circle,rgba(69,232,232,.12),transparent 62%)}
       .editor-modal{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:24px;background:rgba(0,6,8,.78);backdrop-filter:blur(4px)}.editor-modal-card{width:min(540px,100%);max-height:calc(100vh - 48px);overflow:auto;background:#09171b;border:1px solid var(--cyan);box-shadow:0 18px 70px rgba(0,0,0,.55)}.editor-modal-card>header{display:flex;align-items:center;padding:16px;margin:0;border-bottom:1px solid var(--line)}.editor-modal-card>header h2{font-size:17px;margin:2px 0 0}.editor-modal-card>header button{margin-left:auto;width:36px;min-height:36px;padding:0}.dialog-title{display:flex;align-items:center;gap:11px}.dialog-title>ha-icon{color:var(--cyan);--mdc-icon-size:30px}.dialog-copy{padding:14px 16px;color:var(--muted);font-size:11px}.editor-modal-card>[data-picker-selector]{display:block;padding:0 16px 18px}.dialog-fields{display:grid;gap:14px;padding:18px}.dialog-fields label{font-size:9px}.dialog-fields input,.dialog-fields select{margin-top:6px}.editor-modal-card>footer{display:flex;justify-content:space-between;gap:10px;padding:14px 18px;border-top:1px solid var(--line)}

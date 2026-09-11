@@ -23,6 +23,7 @@ COMPOSITION_SLOTS = {
     "focused_control": frozenset(
         {"left_instrument", "core", "right_instrument", "footer"}
     ),
+    "full_page": frozenset({"full_page"}),
 }
 SECTION_TYPES = frozenset(
     {

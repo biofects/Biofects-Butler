@@ -571,6 +571,30 @@ def test_rejects_duplicate_slots() -> None:
         module.parse_dashboard_profile(payload)
 
 
+def test_accepts_full_page_composition() -> None:
+    """A full-page dashboard contains one panel spanning the content body."""
+    module = load_profiles_module()
+    payload = valid_profile()
+    payload["screens"][1].update(
+        composition="full_page",
+        sections=[
+            {
+                "section_id": "climate_full_page",
+                "type": "climate",
+                "slot": "full_page",
+                "bindings": [
+                    {"kind": "entity", "target_id": "climate.downstairs"}
+                ],
+            }
+        ],
+    )
+
+    profile = module.parse_dashboard_profile(payload)
+
+    assert profile.screens[1].composition == "full_page"
+    assert profile.screens[1].sections[0].slot == "full_page"
+
+
 def test_rejects_unknown_navigation_target() -> None:
     """Navigation actions must resolve within the same atomic profile."""
     module = load_profiles_module()
