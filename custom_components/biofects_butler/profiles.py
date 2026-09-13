@@ -131,6 +131,7 @@ class ProfileScreen:
     title: str
     composition: str
     sections: tuple[ProfileSection, ...]
+    font_scale: int = 100
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,12 +161,15 @@ class DashboardProfile:
 
 
 def _screen_as_dict(screen: ProfileScreen) -> dict[str, Any]:
-    return {
+    data = {
         "screen_id": screen.screen_id,
         "title": screen.title,
         "composition": screen.composition,
         "sections": [_section_as_dict(section) for section in screen.sections],
     }
+    if screen.font_scale != 100:
+        data["font_scale"] = screen.font_scale
+    return data
 
 
 def parse_dashboard_profile(payload: Mapping[str, Any]) -> DashboardProfile:
@@ -391,7 +395,7 @@ def _parse_screen(value: Any, path: str) -> ProfileScreen:
     data = _mapping(value, path)
     required = {"screen_id", "title", "composition", "sections"}
     # Accept legacy card-host settings so existing profiles migrate back to native pages.
-    optional = {"ha_dashboard_path", "ha_view_path", "ha_card_scale"}
+    optional = {"ha_dashboard_path", "ha_view_path", "ha_card_scale", "font_scale"}
     _keys(data, required, optional, path)
     composition = _choice(data["composition"], COMPOSITION_SLOTS, f"{path}.composition")
     sections_value = _list(data["sections"], f"{path}.sections", maximum=20)
@@ -406,6 +410,7 @@ def _parse_screen(value: Any, path: str) -> ProfileScreen:
         title=_text(data["title"], f"{path}.title", maximum=80),
         composition=composition,
         sections=sections,
+        font_scale=_integer_range(data.get("font_scale", 100), 75, 175, f"{path}.font_scale"),
     )
 
 

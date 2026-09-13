@@ -67,6 +67,7 @@ def valid_profile() -> dict:
                 "screen_id": "climate",
                 "title": "Climate",
                 "composition": "focused_control",
+                "font_scale": 135,
                 "sections": [
                     {
                         "section_id": "climate_core",
@@ -90,6 +91,26 @@ def valid_profile() -> dict:
             },
         ],
     }
+
+
+def test_round_trips_screen_font_scale() -> None:
+    """Per-screen text scaling survives profile validation and serialization."""
+    module = load_profiles_module()
+    profile = module.parse_dashboard_profile(valid_profile())
+
+    assert profile.screens[0].font_scale == 100
+    assert profile.screens[1].font_scale == 135
+    assert profile.as_dict()["screens"][1]["font_scale"] == 135
+
+
+def test_rejects_screen_font_scale_outside_supported_range() -> None:
+    """Extreme text scales cannot create unusable dashboard layouts."""
+    module = load_profiles_module()
+    payload = valid_profile()
+    payload["screens"][1]["font_scale"] = 200
+
+    with pytest.raises(module.ProfileValidationError, match="font_scale"):
+        module.parse_dashboard_profile(payload)
 
 
 def legacy_v0_profile() -> dict:

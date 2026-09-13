@@ -56,7 +56,7 @@ def test_converts_card_from_dashboard_view() -> None:
 
 def test_rejects_unsupported_card() -> None:
     """Unsupported custom cards fail clearly instead of producing a broken panel."""
-    with pytest.raises(LovelaceYamlError, match="No supported card found"):
+    with pytest.raises(LovelaceYamlError, match="cannot be converted automatically"):
         convert_lovelace_yaml("type: custom:unknown-card\nentity: sensor.example")
 
 
@@ -64,3 +64,60 @@ def test_rejects_wrong_helper_domain() -> None:
     """Role-specific helper domains are validated during conversion."""
     with pytest.raises(LovelaceYamlError, match="search_entity must use the input_text domain"):
         convert_lovelace_yaml(MEALIE_CARD.replace("input_text.recipe_search_query", "sensor.recipe_search_query"))
+
+
+def test_converts_standard_entities_card() -> None:
+    """Standard entity cards retain entities and infer the native panel type."""
+    result = convert_lovelace_yaml(
+        """type: entities
+title: Entry
+entities:
+  - lock.front_door
+  - entity: sensor.front_door_battery
+"""
+    )
+
+    assert result["type"] == "security"
+    assert result["title"] == "Entry"
+    assert [binding["target_id"] for binding in result["bindings"]] == [
+        "lock.front_door",
+        "sensor.front_door_battery",
+    ]
+
+
+def test_converts_button_stack_actions() -> None:
+    """Nested button actions become editable native Quick Commands."""
+    result = convert_lovelace_yaml(
+        """type: horizontal-stack
+cards:
+  - type: button
+    name: Dinner
+    icon: mdi:food
+    tap_action:
+      action: perform-action
+      perform_action: script.dinner_time
+  - type: button
+    name: Lights
+    entity: light.kitchen
+    tap_action:
+      action: toggle
+"""
+    )
+
+    assert result["type"] == "entity_controls"
+    assert result["bindings"] == [{"kind": "entity", "target_id": "light.kitchen"}]
+    assert result["actions"][0] == {
+        "gesture": "tap",
+        "name": "Dinner",
+        "icon": "mdi:food",
+        "type": "call_service",
+        "domain": "script",
+        "service": "dinner_time",
+    }
+    assert result["actions"][1]["type"] == "toggle"
+
+
+def test_rejects_standard_card_without_convertible_content() -> None:
+    """Cards without native entities or actions receive a useful error."""
+    with pytest.raises(LovelaceYamlError, match="no entities or actions"):
+        convert_lovelace_yaml("type: markdown\ncontent: Hello")

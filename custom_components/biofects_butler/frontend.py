@@ -9,7 +9,7 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import HomeAssistant
 
 PANEL_URL_PATH = "biofects-butler"
-PANEL_MODULE_URL = "/biofects_butler_static/biofects-butler-panel.js?v=63"
+PANEL_MODULE_URL = "/biofects_butler_static/biofects-butler-panel.js?v=64"
 PANEL_ELEMENT = "biofects-butler-panel"
 
 
