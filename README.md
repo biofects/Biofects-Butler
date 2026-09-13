@@ -24,7 +24,7 @@ Biofects Butler is the Home Assistant integration for the Biofects Butler Androi
 
 After setup, administrators can open **Butler Dashboards** from the Home Assistant sidebar.
 
-Android beta.18 requires integration version `0.1.0-beta.19` or newer for greeting weather selection and automatic migration of retired Robot assignments to Holographic Interface.
+Android beta.22 requires integration version `0.1.0-beta.25` or newer for native Recipe Browser pages, Lovelace YAML conversion, profile downgrade protection, greeting weather selection, and automatic migration of retired Robot assignments to Holographic Interface.
 
 ## Manual installation
 

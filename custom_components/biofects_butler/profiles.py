@@ -39,6 +39,7 @@ SECTION_TYPES = frozenset(
         "power",
         "quick_commands",
         "calendar_form",
+        "recipe_browser",
     }
 )
 BINDING_KINDS = frozenset({"entity", "device", "area"})
@@ -119,6 +120,7 @@ class ProfileSection:
     projection_color: str = "#16D9FF"
     projection_origin: int = 12
     projection_strength: int = 13
+    default_image: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -410,7 +412,7 @@ def _parse_screen(value: Any, path: str) -> ProfileScreen:
 def _parse_section(value: Any, composition: str, path: str) -> ProfileSection:
     data = _mapping(value, path)
     required = {"section_id", "type", "slot"}
-    optional = {"title", "secondary_title", "panel_height", "bindings", "actions", "initial_view", "forecast_type", "popup_style", "popup_width", "popup_max_width", "popup_max_height", "content_scale", "projection_color", "projection_origin", "projection_strength"}
+    optional = {"title", "secondary_title", "panel_height", "bindings", "actions", "initial_view", "forecast_type", "popup_style", "popup_width", "popup_max_width", "popup_max_height", "content_scale", "projection_color", "projection_origin", "projection_strength", "default_image"}
     _keys(data, required, optional, path)
     slot = _choice(data["slot"], COMPOSITION_SLOTS[composition], f"{path}.slot")
     bindings_value = _list(data.get("bindings", []), f"{path}.bindings", maximum=100)
@@ -450,6 +452,11 @@ def _parse_section(value: Any, composition: str, path: str) -> ProfileSection:
         projection_color=_color(data.get("projection_color", "#16D9FF"), f"{path}.projection_color"),
         projection_origin=_integer_range(data.get("projection_origin", 12), 0, 100, f"{path}.projection_origin"),
         projection_strength=_integer_range(data.get("projection_strength", 13), 0, 100, f"{path}.projection_strength"),
+        default_image=(
+            _text(data["default_image"], f"{path}.default_image", maximum=500)
+            if data.get("default_image") is not None
+            else None
+        ),
     )
 
 
@@ -614,6 +621,8 @@ def _section_as_dict(section: ProfileSection) -> dict[str, Any]:
         ]
     if section.actions:
         data["actions"] = [_action_as_dict(action) for action in section.actions]
+    if section.default_image is not None:
+        data["default_image"] = section.default_image
     if section.initial_view != "dayGridMonth":
         data["initial_view"] = section.initial_view
     if section.forecast_type != "daily":

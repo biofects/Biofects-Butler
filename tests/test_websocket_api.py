@@ -49,6 +49,7 @@ def test_registers_status_command(websocket_modules) -> None:
         module.websocket_subscribe_status,
         module.websocket_get_setup_options,
         module.websocket_get_dashboard_profiles,
+            module.websocket_convert_lovelace_yaml,
         module.websocket_save_dashboard_profile,
         module.websocket_delete_dashboard_profile,
         module.websocket_register_display,

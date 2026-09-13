@@ -60,8 +60,8 @@ def test_empty_store_loads_builtin_default(store_module) -> None:
     assert store.for_display("unassigned").profile_id == "default"
 
 
-def test_load_recovers_valid_profiles_and_assignments(store_module) -> None:
-    """Corrupt records are skipped without losing valid neighboring data."""
+def test_load_preserves_storage_when_a_profile_is_rejected(store_module) -> None:
+    """Unknown profiles are skipped in memory without rewriting stored data."""
     custom = dict(store_module.DEFAULT_PROFILE_PAYLOAD)
     custom.update(
         profile_id="bedroom", name="Bedroom", theme="holographic_interface"
@@ -97,13 +97,7 @@ def test_load_recovers_valid_profiles_and_assignments(store_module) -> None:
     assert store.assignments == {"wall-tablet": "bedroom"}
     assert store.display_themes == {"wall-tablet": "holographic_interface"}
     assert store.for_display("wall-tablet").profile_id == "bedroom"
-    assert FakeStore.saved["display_themes"] == {
-        "wall-tablet": "holographic_interface"
-    }
-    assert "theme" not in next(
-        profile for profile in FakeStore.saved["profiles"]
-        if profile["profile_id"] == "bedroom"
-    )
+    assert FakeStore.saved is None
 
 
 def test_load_migrates_robot_theme_to_holographic(store_module) -> None:
@@ -544,8 +538,8 @@ def test_load_migrates_and_rewrites_legacy_profile(store_module) -> None:
     assert "version" not in saved
 
 
-def test_load_rewrites_recovered_snapshot_without_future_profile(store_module) -> None:
-    """Unsupported profiles and dangling assignments are removed atomically."""
+def test_load_does_not_rewrite_snapshot_with_future_profile(store_module) -> None:
+    """Unsupported future profiles and their assignments remain recoverable."""
     future = dict(store_module.DEFAULT_PROFILE_PAYLOAD)
     future.update(profile_id="future", schema_version=99)
     FakeStore.loaded = {
@@ -558,7 +552,5 @@ def test_load_rewrites_recovered_snapshot_without_future_profile(store_module) -
     asyncio.run(store.async_load())
 
     assert [profile.profile_id for profile in store.profiles] == ["default"]
-    assert FakeStore.saved["assignments"] == {}
-    assert [item["profile_id"] for item in FakeStore.saved["profiles"]] == [
-        "default"
-    ]
+    assert store.assignments == {}
+    assert FakeStore.saved is None

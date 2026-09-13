@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
+import logging
 import re
 from typing import Any
 
@@ -28,6 +29,8 @@ _DISPLAY_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,127}$")
 VIEWPORT_CLASSES = frozenset({"compact", "medium", "expanded"})
 DISPLAY_EDITIONS = frozenset({"free", "paid"})
 MAX_FREE_DISPLAYS = 2
+
+_LOGGER = logging.getLogger(__name__)
 
 DEFAULT_PROFILE_PAYLOAD: dict[str, Any] = {
     "schema_version": 1,
@@ -140,14 +143,21 @@ class DashboardProfileStore:
         if not isinstance(stored, Mapping):
             return
         recovered = False
+        rejected_profile = False
 
         profiles = stored.get("profiles")
         if isinstance(profiles, list):
             for payload in profiles:
                 try:
                     profile = parse_dashboard_profile(payload)
-                except (ProfileValidationError, TypeError):
+                except (ProfileValidationError, TypeError) as err:
                     recovered = True
+                    rejected_profile = True
+                    _LOGGER.warning(
+                        "Preserving dashboard storage after rejecting profile %r: %s",
+                        payload.get("profile_id") if isinstance(payload, Mapping) else None,
+                        err,
+                    )
                     continue
                 self._profiles[profile.profile_id] = profile
                 if payload != profile.as_dict():
@@ -201,7 +211,7 @@ class DashboardProfileStore:
                 self._display_themes[display_id] = self._profiles[profile_id].theme
                 recovered = True
 
-        if recovered:
+        if recovered and not rejected_profile:
             await self._async_save_snapshot(
                 self._profiles, self._displays, self._assignments, self._display_themes
             )

@@ -95,6 +95,7 @@ def test_setup_registers_websocket_command(integration_module) -> None:
         "websocket_subscribe_status",
         "websocket_get_setup_options",
         "websocket_get_dashboard_profiles",
+        "websocket_convert_lovelace_yaml",
         "websocket_save_dashboard_profile",
         "websocket_delete_dashboard_profile",
         "websocket_register_display",
@@ -110,7 +111,7 @@ def test_setup_registers_websocket_command(integration_module) -> None:
             "webcomponent_name": "biofects-butler-panel",
             "sidebar_title": "Butler Dashboards",
             "sidebar_icon": "mdi:monitor-dashboard",
-            "module_url": "/biofects_butler_static/biofects-butler-panel.js?v=60",
+            "module_url": "/biofects_butler_static/biofects-butler-panel.js?v=63",
             "require_admin": True,
         }
     ]

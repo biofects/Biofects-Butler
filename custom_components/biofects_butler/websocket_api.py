@@ -23,6 +23,7 @@ from .const import (
     SIGNAL_STATUS_UPDATED,
 )
 from .profiles import ProfileValidationError
+from .lovelace_yaml import LovelaceYamlError, MAX_YAML_LENGTH, convert_lovelace_yaml
 from .status import get_status
 from .setup_options import async_get_setup_options
 
@@ -34,6 +35,7 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, websocket_subscribe_status)
     websocket_api.async_register_command(hass, websocket_get_setup_options)
     websocket_api.async_register_command(hass, websocket_get_dashboard_profiles)
+    websocket_api.async_register_command(hass, websocket_convert_lovelace_yaml)
     websocket_api.async_register_command(hass, websocket_save_dashboard_profile)
     websocket_api.async_register_command(hass, websocket_delete_dashboard_profile)
     websocket_api.async_register_command(hass, websocket_register_display)
@@ -152,6 +154,27 @@ def websocket_get_dashboard_profiles(
 ) -> None:
     """Return all profiles, registered displays, and assignments."""
     connection.send_result(msg["id"], _profiles_payload(hass))
+
+
+@callback
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "biofects_butler/convert_lovelace_yaml",
+        vol.Required("yaml"): vol.All(str, vol.Length(max=MAX_YAML_LENGTH)),
+    }
+)
+def websocket_convert_lovelace_yaml(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Convert supported pasted Lovelace YAML into a native Butler panel."""
+    try:
+        panel = convert_lovelace_yaml(msg["yaml"])
+    except LovelaceYamlError as error:
+        connection.send_error(msg["id"], "unsupported_yaml", str(error))
+        return
+    connection.send_result(msg["id"], {"panel": panel})
 
 
 @websocket_api.websocket_command(

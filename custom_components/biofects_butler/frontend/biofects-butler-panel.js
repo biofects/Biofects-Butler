@@ -21,13 +21,14 @@ const SLOT_LABELS = {
 
 const SECTION_TYPES = [
   "status_overview", "orbital_menu", "entity_controls", "security", "climate",
-  "cameras", "media", "events", "weather", "power", "quick_commands", "calendar_form",
+  "cameras", "media", "events", "weather", "power", "quick_commands", "calendar_form", "recipe_browser",
 ];
 const ACTION_TYPES = ["more_info", "toggle", "activate", "navigate", "call_service"];
 const BINDING_ROLES = [
   "none", "calendar_source", "weather_source", "media_source", "event_title",
   "event_notification", "event_all_day", "event_all_day_date", "event_start",
   "event_end", "event_description", "event_repeat", "event_create", "event_reset",
+  "recipe_results", "recipe_search", "recipe_selected", "recipe_detail",
 ];
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -231,6 +232,7 @@ class BiofectsButlerPanel extends HTMLElement {
     }
     if (section.type === "quick_commands") return this._quickCommandsEditor(section, screen, screenIndex, sectionIndex);
     if (section.type === "calendar_form") return this._calendarFormEditor(section, screen, screenIndex, sectionIndex);
+    if (section.type === "recipe_browser") return this._recipeBrowserEditor(section, screen, screenIndex, sectionIndex);
     if (section.type === "weather") return this._weatherEditor(section, screen, screenIndex, sectionIndex);
     const entityDomain = screen.screen_id === "home" && section.slot === "media" ? "media_player"
       : screen.screen_id === "home" && section.slot === "events" ? "calendar" : null;
@@ -325,6 +327,24 @@ class BiofectsButlerPanel extends HTMLElement {
     </div>`;
   }
 
+  _recipeBrowserEditor(section, screen, screenIndex, sectionIndex) {
+    const location = `data-screen="${screenIndex}" data-section="${sectionIndex}"`;
+    const fields = [
+      ["recipe_results", "SEARCH RESULTS", "sensor", "sensor.recipe_search_results"],
+      ["recipe_search", "SEARCH QUERY", "input_text", "input_text.recipe_search_query"],
+      ["recipe_selected", "SELECTED RECIPE ID", "input_text", "input_text.recipe_selected_id"],
+      ["recipe_detail", "RECIPE DETAILS", "sensor", "sensor.selected_recipe"],
+    ];
+    return `<div class="section-block slot-${section.slot} panel-full-height">
+      <div class="slot-heading"><label><span>RECIPE PAGE TITLE</span><input data-section-heading ${location} value="${escapeHtml(section.title || "Recipes")}"></label><label><span>PANEL TYPE</span><select data-section-type ${location}>${SECTION_TYPES.map((type) => `<option value="${type}" ${section.type === type ? "selected" : ""}>${label(type)}</option>`).join("")}</select></label>${this._panelControls(screenIndex, sectionIndex, section, screen.sections.length)}</div>
+      <div class="form-config-grid recipe-config-grid">
+        ${fields.map(([role, title, domain, placeholder]) => `<div class="recipe-config-field"><div class="recipe-field-heading"><span>${title}</span><button title="Convert Lovelace YAML" data-action="open-panel-yaml" ${location}><ha-icon icon="mdi:code-braces"></ha-icon>YAML</button></div><div data-recipe-entity-selector="${screenIndex}-${sectionIndex}-${role}" data-entity-domain="${domain}" data-placeholder="${placeholder}"></div></div>`).join("")}
+        <label class="recipe-config-field"><span class="recipe-field-heading"><span>DEFAULT IMAGE</span><button type="button" title="Convert Lovelace YAML" data-action="open-panel-yaml" ${location}><ha-icon icon="mdi:code-braces"></ha-icon>YAML</button></span><input ${location} data-field="default_image" value="${escapeHtml(section.default_image || "/local/images/recipe-default.jpg")}" placeholder="/local/images/recipe-default.jpg"></label>
+      </div>
+      <div class="home-mode-note"><ha-icon icon="mdi:food"></ha-icon><span><strong>Native recipe page</strong><small>Search, browse results, select a recipe, and read ingredients and instructions directly in Butler.</small></span></div>
+    </div>`;
+  }
+
   _popupSettings(section, screenIndex, sectionIndex, expanded = false) {
     const location = `data-screen="${screenIndex}" data-section="${sectionIndex}"`;
     const fields = `<div class="form-config-grid"><label><span>POPUP STYLE</span><select ${location} data-field="popup_style"><option value="standard" ${(section.popup_style || "standard") === "standard" ? "selected" : ""}>Standard</option><option value="projector" ${section.popup_style === "projector" ? "selected" : ""}>Projector</option></select></label><label><span>WIDTH %</span><input type="number" min="30" max="100" ${location} data-field="popup_width" value="${Number(section.popup_width || 58)}"></label><label><span>MAX WIDTH</span><input type="number" min="320" max="1600" ${location} data-field="popup_max_width" value="${Number(section.popup_max_width || 720)}"></label><label><span>MAX HEIGHT</span><input type="number" min="240" max="1200" ${location} data-field="popup_max_height" value="${Number(section.popup_max_height || 580)}"></label><label><span>CONTENT SCALE %</span><input type="number" min="60" max="140" ${location} data-field="content_scale" value="${Number(section.content_scale || 100)}"></label><label><span>PROJECTION COLOR</span><input type="color" ${location} data-field="projection_color" value="${escapeHtml(section.projection_color || "#16d9ff")}"></label><label><span>LIGHT ORIGIN %</span><input type="number" min="0" max="100" ${location} data-field="projection_origin" value="${Number(section.projection_origin ?? 12)}"></label><label><span>LIGHT STRENGTH %</span><input type="number" min="0" max="100" ${location} data-field="projection_strength" value="${Number(section.projection_strength ?? 13)}"></label></div>`;
@@ -333,7 +353,47 @@ class BiofectsButlerPanel extends HTMLElement {
 
   _panelControls(screenIndex, sectionIndex, section, panelCount) {
     const fullHeight = section.panel_height === "full_height";
-    return `<div class="panel-controls"><button class="icon" title="Move panel earlier" data-action="move-section" data-screen="${screenIndex}" data-index="${sectionIndex}" data-direction="-1" ${sectionIndex === 0 ? "disabled" : ""}><ha-icon icon="mdi:chevron-left"></ha-icon></button><button class="icon" title="Move panel later" data-action="move-section" data-screen="${screenIndex}" data-index="${sectionIndex}" data-direction="1" ${sectionIndex === panelCount - 1 ? "disabled" : ""}><ha-icon icon="mdi:chevron-right"></ha-icon></button><button class="panel-height ${fullHeight ? "selected" : ""}" title="${fullHeight ? "Use standard panel height" : "Make panel full height"}" data-action="toggle-panel-height" data-screen="${screenIndex}" data-section="${sectionIndex}"><ha-icon icon="${fullHeight ? "mdi:arrow-collapse-vertical" : "mdi:arrow-expand-vertical"}"></ha-icon>${fullHeight ? "Full Height" : "Standard"}</button><button class="icon danger" title="Remove panel and its cards" data-action="remove-section" data-screen="${screenIndex}" data-index="${sectionIndex}"><ha-icon icon="mdi:delete-outline"></ha-icon></button></div>`;
+    return `<div class="panel-controls"><button class="icon" title="Move panel earlier" data-action="move-section" data-screen="${screenIndex}" data-index="${sectionIndex}" data-direction="-1" ${sectionIndex === 0 ? "disabled" : ""}><ha-icon icon="mdi:chevron-left"></ha-icon></button><button class="icon" title="Move panel later" data-action="move-section" data-screen="${screenIndex}" data-index="${sectionIndex}" data-direction="1" ${sectionIndex === panelCount - 1 ? "disabled" : ""}><ha-icon icon="mdi:chevron-right"></ha-icon></button><button class="panel-height" title="Paste Lovelace YAML" data-action="open-panel-yaml" data-screen="${screenIndex}" data-section="${sectionIndex}"><ha-icon icon="mdi:code-braces"></ha-icon>YAML</button><button class="panel-height ${fullHeight ? "selected" : ""}" title="${fullHeight ? "Use standard panel height" : "Make panel full height"}" data-action="toggle-panel-height" data-screen="${screenIndex}" data-section="${sectionIndex}"><ha-icon icon="${fullHeight ? "mdi:arrow-collapse-vertical" : "mdi:arrow-expand-vertical"}"></ha-icon>${fullHeight ? "Full Height" : "Standard"}</button><button class="icon danger" title="Remove panel and its cards" data-action="remove-section" data-screen="${screenIndex}" data-index="${sectionIndex}"><ha-icon icon="mdi:delete-outline"></ha-icon></button></div>`;
+  }
+
+  async _applyPanelYaml(screenIndex, sectionIndex) {
+    const source = this.shadowRoot.querySelector("[data-panel-yaml]")?.value || "";
+    if (!source.trim()) {
+      this._message = "Paste Lovelace YAML before converting.";
+      this._render();
+      return;
+    }
+    try {
+      const result = await this._hass.callWS({ type: "biofects_butler/convert_lovelace_yaml", yaml: source });
+      const converted = result.panel;
+      const screen = this._draft.screens[screenIndex];
+      const current = screen.sections[sectionIndex];
+      if (converted.full_page && screen.sections.length > 1
+        && !confirm("This YAML requests full width. Converting this screen to Full Page removes its other panels. Continue?")) return;
+      const slot = converted.full_page ? "full_page" : current.slot;
+      const replacement = {
+        ...current,
+        type: converted.type,
+        slot,
+        title: converted.title,
+        bindings: converted.bindings,
+        actions: [],
+        default_image: converted.default_image,
+        panel_height: "full_height",
+      };
+      if (converted.full_page) {
+        screen.composition = "full_page";
+        screen.sections = [replacement];
+      } else {
+        screen.sections[sectionIndex] = replacement;
+      }
+      this._activeSectionSlot = slot;
+      this._editorDialog = null;
+      this._message = `${label(converted.type)} YAML converted. Save the profile to apply it.`;
+    } catch (error) {
+      this._message = error?.message || "The pasted YAML could not be converted.";
+    }
+    this._render();
   }
 
   _homeSidebarEditor(section, screenIndex, sectionIndex) {
@@ -381,6 +441,9 @@ class BiofectsButlerPanel extends HTMLElement {
     const dialog = this._editorDialog;
     if (!dialog) return "";
     const section = this._draft.screens[dialog.screen].sections[dialog.section];
+    if (dialog.type === "yaml") {
+      return `<div class="editor-modal" data-action="close-editor-dialog"><div class="editor-modal-card yaml-import-card" data-dialog-card><header><div><p class="eyebrow">CONVERT LOVELACE</p><h2>Paste card YAML</h2></div><button data-action="close-editor-dialog" title="Close">×</button></header><p class="dialog-copy">Paste a supported Lovelace card or an entire view. Butler converts it into a native panel; it does not run custom card JavaScript.</p><textarea data-panel-yaml spellcheck="false" placeholder="type: custom:mealie-recipe-browser&#10;results_entity: sensor.recipe_search_results&#10;search_entity: input_text.recipe_search_query&#10;selected_entity: input_text.recipe_selected_id&#10;detail_entity: sensor.selected_recipe"></textarea><div class="yaml-supported"><strong>SUPPORTED NOW</strong><span>custom:mealie-recipe-browser</span></div><div class="button-row"><button data-action="close-editor-dialog">Cancel</button><button class="primary" data-action="apply-panel-yaml" data-screen="${dialog.screen}" data-section="${dialog.section}">Convert and Apply</button></div></div></div>`;
+    }
     if (dialog.type === "add") {
       const entities = Object.entries(this._hass?.states || {})
         .filter(([entityId]) => !dialog.domain || entityId.startsWith(`${dialog.domain}.`))
@@ -541,6 +604,24 @@ class BiofectsButlerPanel extends HTMLElement {
       selector.addEventListener("value-changed", (event) => { action.target_id = event.detail.value; });
       host.append(selector);
     });
+    this.shadowRoot.querySelectorAll("[data-recipe-entity-selector]").forEach((host) => {
+      if (host.firstElementChild) return;
+      const [screenIndex, sectionIndex, ...roleParts] = host.dataset.recipeEntitySelector.split("-");
+      const role = roleParts.join("-");
+      const section = this._draft.screens[Number(screenIndex)].sections[Number(sectionIndex)];
+      const selector = document.createElement("ha-selector");
+      selector.hass = this._hass;
+      selector.selector = { entity: { domain: host.dataset.entityDomain } };
+      selector.value = (section.bindings || []).find((binding) => binding.role === role)?.target_id || "";
+      selector.setAttribute("data-placeholder", host.dataset.placeholder || "");
+      selector.addEventListener("value-changed", (event) => {
+        const retained = (section.bindings || []).filter((binding) => binding.role !== role);
+        section.bindings = event.detail.value
+          ? [...retained, { kind: "entity", target_id: event.detail.value, role }]
+          : retained;
+      });
+      host.append(selector);
+    });
     this.shadowRoot.querySelectorAll("[data-binding-entities-selector]").forEach((host) => {
       if (host.firstElementChild) return;
       const [screenIndex, sectionIndex, bindingIndex] = host.dataset.bindingEntitiesSelector.split("-").map(Number);
@@ -603,6 +684,11 @@ class BiofectsButlerPanel extends HTMLElement {
     }
     if (action === "select-panel") this._activeSectionSlot = button.dataset.panelSlot;
     if (action === "select-layout") this._applyComposition(Number(button.dataset.screen), button.dataset.composition);
+    if (action === "open-panel-yaml") this._editorDialog = { type: "yaml", screen: Number(button.dataset.screen), section: Number(button.dataset.section) };
+    if (action === "apply-panel-yaml") {
+      await this._applyPanelYaml(Number(button.dataset.screen), Number(button.dataset.section));
+      return;
+    }
     if (action === "remove-screen") this._removeScreen(Number(button.dataset.index));
     if (action === "move-screen") this._move(this._draft.screens, Number(button.dataset.index), Number(button.dataset.direction));
     if (action === "add-section") this._addSection(Number(button.dataset.screen), button.dataset.slot);
@@ -1268,6 +1354,8 @@ class BiofectsButlerPanel extends HTMLElement {
       .slot-editor>.section-block{display:flex;flex-direction:column}.slot-heading{min-height:44px;margin:0 0 8px;padding-bottom:7px;border-bottom:1px solid #17434a}.slot-heading label{min-width:0;flex:1;margin:0}.slot-heading label span{display:block;margin-bottom:3px;color:var(--muted);font-size:7px;text-align:left}.slot-heading label input{min-height:28px;padding:4px 6px;color:var(--cyan);font-size:10px}.region-add{width:28px;min-height:28px;padding:0;border-color:#267680;color:var(--cyan);font-size:18px}.panel-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:7px;margin:12px 0 4px;padding:9px;border:1px solid #143c42;background:#071014}.panel-toolbar strong{margin-right:4px;color:var(--cyan);font-size:9px}.panel-toolbar button{display:flex;align-items:center;gap:5px;min-height:32px;padding:5px 8px;font-size:8px}.panel-toolbar button ha-icon{--mdc-icon-size:15px}.panel-toolbar small{color:var(--muted);font-size:8px}.panel-controls{display:flex;gap:5px}.panel-controls button{min-height:28px;padding:3px 6px}.panel-height{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:7px}.panel-height.selected{border-color:var(--cyan);color:var(--cyan);background:#0b2024}.panel-height ha-icon,.panel-controls .icon ha-icon{--mdc-icon-size:15px}.panel-controls .icon{width:28px}.empty-panels{display:grid;place-items:center;grid-column:1/-1;min-height:220px;color:var(--muted);border:1px dashed #28626a}
       .entity-canvas{flex:1}.entity-card{grid-template-columns:17px 28px minmax(0,1fr) auto auto 30px;padding:7px;gap:7px}.entity-card ha-icon{--mdc-icon-size:22px}.entity-copy strong{font-size:10px}.tap-mode{color:#73b7bb;font-size:7px;border:1px solid #245c63;padding:3px 5px}.card-settings,.live-toggle{display:grid;place-items:center;width:30px;min-height:30px;padding:0}.card-settings ha-icon,.live-toggle ha-icon{--mdc-icon-size:17px}.live-toggle.is-on{color:#021012;background:var(--cyan);border-color:var(--cyan)}.drop-empty{width:100%;min-height:92px;border:1px dashed #28626a;background:transparent;color:var(--muted);display:grid;place-items:center;align-content:center;gap:7px}.drop-empty ha-icon{color:var(--cyan);--mdc-icon-size:28px}.slot-camera_primary .drop-empty{min-height:180px}.slot-reactor .drop-empty,.slot-core .drop-empty{border-radius:50%;width:min(180px,80%);aspect-ratio:1;justify-self:center;align-self:center;background:radial-gradient(circle,rgba(69,232,232,.12),transparent 62%)}
       .editor-modal{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:24px;background:rgba(0,6,8,.78);backdrop-filter:blur(4px)}.editor-modal-card{width:min(540px,100%);max-height:calc(100vh - 48px);overflow:auto;background:#09171b;border:1px solid var(--cyan);box-shadow:0 18px 70px rgba(0,0,0,.55)}.editor-modal-card>header{display:flex;align-items:center;padding:16px;margin:0;border-bottom:1px solid var(--line)}.editor-modal-card>header h2{font-size:17px;margin:2px 0 0}.editor-modal-card>header button{margin-left:auto;width:36px;min-height:36px;padding:0}.dialog-title{display:flex;align-items:center;gap:11px}.dialog-title>ha-icon{color:var(--cyan);--mdc-icon-size:30px}.dialog-copy{padding:14px 16px;color:var(--muted);font-size:11px}.editor-modal-card>[data-picker-selector]{display:block;padding:0 16px 18px}.dialog-fields{display:grid;gap:14px;padding:18px}.dialog-fields label{font-size:9px}.dialog-fields input,.dialog-fields select{margin-top:6px}.editor-modal-card>footer{display:flex;justify-content:space-between;gap:10px;padding:14px 18px;border-top:1px solid var(--line)}
+      .yaml-import-card{width:min(800px,100%)}.yaml-import-card textarea{display:block;width:calc(100% - 32px);min-height:300px;margin:0 16px 14px;padding:12px;resize:vertical;border:1px solid var(--line);background:#03090b;color:#d8f7f7;font:12px/1.5 "Share Tech Mono","IBM Plex Mono",monospace}.yaml-import-card textarea:focus{outline:1px solid var(--cyan)}.yaml-import-card .button-row{padding:0 16px 16px}.yaml-supported{display:flex;gap:12px;margin:0 16px 14px;padding:8px;border-left:2px solid var(--cyan);background:#0b1d21;font-size:8px}.yaml-supported strong{color:var(--cyan)}.yaml-supported span{color:var(--muted)}
+      .recipe-config-field{display:block;min-width:0;margin:0}.recipe-field-heading{display:flex!important;align-items:center;justify-content:space-between;gap:6px;min-height:26px;margin-bottom:4px!important}.recipe-field-heading>span{margin:0!important}.recipe-field-heading button{display:flex;align-items:center;gap:3px;min-height:24px;padding:2px 5px;color:var(--cyan);font-size:7px}.recipe-field-heading button ha-icon{--mdc-icon-size:13px}
       .fixed-value{display:flex;align-items:center;min-height:38px;padding:8px 12px;border:1px solid var(--line);color:var(--cyan)}.home-mode-note{display:flex;align-items:center;gap:10px;margin:12px 0;padding:10px;border:1px solid #267680;background:#0a1d22}.home-mode-note ha-icon{color:var(--cyan)}.home-mode-note strong,.home-mode-note small{display:block}.home-mode-note strong{font-size:11px;color:var(--cyan)}.home-mode-note small{margin-top:3px;font-size:9px;color:var(--muted)}.page-render-settings{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:10px;margin:12px 0;padding:12px;border:1px solid #143c42;background:#071014}.scale-field label span{float:right;color:var(--cyan)}.scale-field input{padding:0}.ha-cards-preview{display:grid;place-items:center;align-content:center;gap:10px;min-height:440px;border:1px dashed #267680;background:rgba(2,10,13,.82);text-align:center}.ha-cards-preview ha-icon{color:var(--cyan);--mdc-icon-size:58px}.ha-cards-preview strong{color:var(--cyan);font-size:16px}.ha-cards-preview span{color:#d8f7f7;font-size:12px}.ha-cards-preview small{max-width:420px;color:var(--muted);font-size:10px}.page-link-card{display:grid;grid-template-columns:28px minmax(0,1fr) auto;align-items:center;gap:8px;width:100%;padding:9px;text-align:left;border-color:#267680;background:#0a1d22}.page-link-card ha-icon{color:var(--cyan);--mdc-icon-size:21px}.page-link-card span{min-width:0}.page-link-card strong,.page-link-card small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.page-link-card strong{color:#d8f7f7;font-size:10px}.page-link-card small{margin-top:2px;color:var(--muted);font-size:7px}.page-link-card em{color:var(--cyan);font-size:7px;font-style:normal}.entity-picker-search{display:grid;grid-template-columns:24px minmax(0,1fr);align-items:center;gap:8px;margin:0 16px 8px;padding:0 10px;border:1px solid var(--line);background:#061014}.entity-picker-search:focus-within{border-color:var(--cyan)}.entity-picker-search ha-icon{color:var(--cyan);--mdc-icon-size:20px}.entity-picker-search input{min-height:44px;padding:8px 0;border:0;background:transparent;outline:0}.entity-picker-summary{padding:0 16px 8px;color:var(--muted);font-size:9px}.entity-picker-list{display:grid;max-height:min(480px,55vh);overflow:auto;border-top:1px solid #143c42}.entity-picker-option{display:grid;grid-template-columns:28px minmax(0,1fr) auto;align-items:center;gap:10px;width:100%;min-height:54px;padding:8px 16px;border:0;border-bottom:1px solid #143c42;text-align:left}.entity-picker-option:hover{background:#0b2024}.entity-picker-option[hidden]{display:none}.entity-picker-option ha-icon{color:var(--cyan);--mdc-icon-size:23px}.entity-picker-option span{min-width:0}.entity-picker-option strong,.entity-picker-option small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.entity-picker-option strong{font-size:11px}.entity-picker-option small{margin-top:3px;color:var(--muted);font-size:9px}.entity-picker-option em{max-width:110px;overflow:hidden;text-overflow:ellipsis;color:#82c8cc;font-size:9px;font-style:normal;white-space:nowrap}.entity-picker-empty{padding:28px 16px;text-align:center;color:var(--muted);font-size:11px}.entity-picker-empty[hidden]{display:none}
       @container(max-width:700px){.entity-card{grid-template-columns:15px 26px minmax(0,1fr) auto 30px}.tap-mode{display:none}.editor-modal{padding:10px}.screen-tabs{position:sticky;top:0;z-index:5;background:#050b0e}.entity-picker-option{grid-template-columns:26px minmax(0,1fr)}.entity-picker-option em{display:none}.page-render-settings{grid-template-columns:1fr}.ha-cards-preview{min-height:280px}}
       .preview-stage.radial_command_overview{grid-template-columns:1fr 1fr 1.6fr 1fr;grid-template-rows:1fr 1fr;grid-template-areas:"overview overview reactor media" "left_menu right_menu reactor events"}.preview-stage.radial_command_overview .slot-overview{grid-area:overview}.preview-stage.radial_command_overview .slot-left_menu{grid-area:left_menu}.preview-stage.radial_command_overview .slot-reactor{grid-area:reactor}.preview-stage.radial_command_overview .slot-right_menu{grid-area:right_menu}.preview-stage.radial_command_overview .slot-media{grid-area:media}.preview-stage.radial_command_overview .slot-events{grid-area:events}

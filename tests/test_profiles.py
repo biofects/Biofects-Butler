@@ -166,6 +166,41 @@ def test_multi_entity_card_round_trips() -> None:
     assert profile.as_dict() == payload
 
 
+def test_recipe_browser_round_trips() -> None:
+    """Recipe helper entities can be configured as one native full-page panel."""
+    module = load_profiles_module()
+    payload = valid_profile()
+    payload["screens"].append(
+        {
+            "screen_id": "recipes",
+            "title": "Recipes",
+            "composition": "full_page",
+            "sections": [
+                {
+                    "section_id": "recipes_full_page",
+                    "type": "recipe_browser",
+                    "slot": "full_page",
+                    "title": "Recipes",
+                    "default_image": "/local/images/recipe-default.jpg",
+                    "bindings": [
+                        {"kind": "entity", "target_id": "sensor.recipe_search_results", "role": "recipe_results"},
+                        {"kind": "entity", "target_id": "input_text.recipe_search_query", "role": "recipe_search"},
+                        {"kind": "entity", "target_id": "input_text.recipe_selected_id", "role": "recipe_selected"},
+                        {"kind": "entity", "target_id": "sensor.selected_recipe", "role": "recipe_detail"},
+                    ],
+                }
+            ],
+        }
+    )
+
+    profile = module.parse_dashboard_profile(payload)
+
+    recipes = profile.screens[-1].sections[0]
+    assert recipes.section_type == "recipe_browser"
+    assert recipes.default_image == "/local/images/recipe-default.jpg"
+    assert profile.as_dict() == payload
+
+
 def test_legacy_holographic_theme_is_accepted_but_not_serialized() -> None:
     """A legacy profile theme remains available for display migration only."""
     module = load_profiles_module()
