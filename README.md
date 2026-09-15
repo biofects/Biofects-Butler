@@ -9,7 +9,7 @@ Biofects Butler is the Home Assistant integration for the Biofects Butler Androi
 - Weather panels with a selectable Home Assistant weather provider and attribute-driven Daily, Hourly, or Twice Daily forecasts.
 - Profile-selectable greeting weather with a concise current temperature and forecast summary.
 - Android greetings based on Home Assistant's configured timezone.
-- Two dashboard themes: Butler Neon and Holographic Interface.
+- Butler Neon and Holographic Interface dashboard themes for all displays, plus Paid-only Biofects HUD.
 - Registration for up to two Free Android devices; private Paid evaluation builds report their edition and are not subject to the Free display limit.
 - A fixed Free assistant identity of `Biofects Butler`; the app and integration do not expose name editing.
 - Native Home Assistant OAuth metadata for the Android application.
@@ -24,7 +24,7 @@ Biofects Butler is the Home Assistant integration for the Biofects Butler Androi
 
 After setup, administrators can open **Butler Dashboards** from the Home Assistant sidebar.
 
-Android beta.23 requires integration version `0.1.0-beta.26` or newer for per-screen text scaling. Beta.26 also adds generalized Lovelace YAML conversion, reliable entity selection, collapsible Quick Commands configuration, native Recipe Browser pages, and profile downgrade protection.
+Android beta.24 requires integration version `0.1.0-beta.27` or newer for the Paid-only Biofects HUD theme. Beta.27 builds on the beta.26 profile editor and display-registration fixes while preserving Butler Neon and Holographic Interface.
 
 ## Manual installation
 

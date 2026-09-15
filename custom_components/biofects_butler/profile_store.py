@@ -144,6 +144,7 @@ class DashboardProfileStore:
             return
         recovered = False
         rejected_profile = False
+        display_aliases: dict[str, str] = {}
 
         profiles = stored.get("profiles")
         if isinstance(profiles, list):
@@ -159,6 +160,12 @@ class DashboardProfileStore:
                         err,
                     )
                     continue
+                if (
+                    profile.profile_id == "biofects_butler"
+                    and profile.name == "Biofects Butler"
+                ):
+                    profile = replace(profile, name="Biofects Profile")
+                    recovered = True
                 self._profiles[profile.profile_id] = profile
                 if payload != profile.as_dict():
                     recovered = True
@@ -173,17 +180,37 @@ class DashboardProfileStore:
                 except (ProfileValidationError, TypeError):
                     recovered = True
                     continue
-                self._displays[display.display_id] = display
+                physical_match = next(
+                    (
+                        registered
+                        for registered in self._displays.values()
+                        if registered.name == display.name
+                        and registered.model == display.model
+                        and registered.viewport_class == display.viewport_class
+                    ),
+                    None,
+                )
+                if physical_match is None:
+                    self._displays[display.display_id] = display
+                elif display.edition == "paid" and physical_match.edition != "paid":
+                    del self._displays[physical_match.display_id]
+                    self._displays[display.display_id] = display
+                    display_aliases[physical_match.display_id] = display.display_id
+                    recovered = True
+                else:
+                    display_aliases[display.display_id] = physical_match.display_id
+                    recovered = True
         elif displays is not None:
             recovered = True
 
         assignments = stored.get("assignments")
         if isinstance(assignments, Mapping):
-            valid_assignments = {
-                display_id: profile_id
-                for display_id, profile_id in assignments.items()
-                if display_id in self._displays and profile_id in self._profiles
-            }
+            valid_assignments: dict[str, str] = {}
+            for display_id, profile_id in assignments.items():
+                canonical_id = display_aliases.get(display_id, display_id)
+                if canonical_id in self._displays and profile_id in self._profiles:
+                    if canonical_id not in valid_assignments or canonical_id == display_id:
+                        valid_assignments[canonical_id] = profile_id
             self._assignments = valid_assignments
             if dict(assignments) != valid_assignments:
                 recovered = True
@@ -192,14 +219,23 @@ class DashboardProfileStore:
 
         display_themes = stored.get("display_themes")
         if isinstance(display_themes, Mapping):
-            valid_themes = {
-                display_id: (
-                    "holographic_interface" if theme == "robot_butler" else theme
+            valid_themes: dict[str, str] = {}
+            for display_id, theme in display_themes.items():
+                canonical_id = display_aliases.get(display_id, display_id)
+                if (
+                    canonical_id in self._displays
+                    and (theme in THEMES or theme == "robot_butler")
+                    and (canonical_id not in valid_themes or canonical_id == display_id)
+                ):
+                    valid_themes[canonical_id] = (
+                    "biofects_hud"
+                    if theme == "robot_butler"
+                    and self._displays[canonical_id].edition == "paid"
+                    else "butler_neon"
+                    if theme in {"robot_butler", "biofects_hud"}
+                    and self._displays[canonical_id].edition != "paid"
+                    else theme
                 )
-                for display_id, theme in display_themes.items()
-                if display_id in self._displays
-                and (theme in THEMES or theme == "robot_butler")
-            }
             self._display_themes = valid_themes
             if dict(display_themes) != valid_themes:
                 recovered = True
@@ -267,6 +303,20 @@ class DashboardProfileStore:
         """Validate and persist renderer capabilities for one display."""
         display = parse_display_registration(payload)
         async with self._mutation_lock:
+            physical_matches = [
+                registered
+                for registered in self._displays.values()
+                if registered.display_id != display.display_id
+                and registered.name == display.name
+                and registered.model == display.model
+                and registered.viewport_class == display.viewport_class
+            ]
+            paid_match = next(
+                (registered for registered in physical_matches if registered.edition == "paid"),
+                None,
+            )
+            if paid_match is not None and display.edition != "paid":
+                display = paid_match
             if display.device_key is None:
                 keyed_match = next(
                     (
@@ -299,6 +349,11 @@ class DashboardProfileStore:
                         display.device_key is not None
                         and registered.device_key is None
                         and registered.name == display.name
+                        and registered.model == display.model
+                        and registered.viewport_class == display.viewport_class
+                    )
+                    or (
+                        registered.name == display.name
                         and registered.model == display.model
                         and registered.viewport_class == display.viewport_class
                     )
@@ -403,6 +458,11 @@ class DashboardProfileStore:
                 raise ProfileValidationError(f"unknown profile {profile_id!r}")
             if theme is not None and theme not in THEMES:
                 raise ProfileValidationError("display theme is unsupported")
+            if (
+                theme == "biofects_hud"
+                and self._displays[display_id].edition != "paid"
+            ):
+                raise ProfileValidationError("Biofects HUD requires the Paid edition")
             assignments = {**self._assignments, display_id: profile_id}
             display_themes = {
                 **self._display_themes,

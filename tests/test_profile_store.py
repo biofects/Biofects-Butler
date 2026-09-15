@@ -60,6 +60,19 @@ def test_empty_store_loads_builtin_default(store_module) -> None:
     assert store.for_display("unassigned").profile_id == "default"
 
 
+def test_load_renames_customized_biofects_profile(store_module) -> None:
+    """The customized Butler profile uses its current display name."""
+    profile = dict(store_module.DEFAULT_PROFILE_PAYLOAD)
+    profile.update(profile_id="biofects_butler", name="Biofects Butler")
+    FakeStore.loaded = {"profiles": [profile]}
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+
+    asyncio.run(store.async_load())
+
+    assert store.get("biofects_butler").name == "Biofects Profile"
+    assert FakeStore.saved["profiles"][0]["name"] == "Biofects Profile"
+
+
 def test_load_preserves_storage_when_a_profile_is_rejected(store_module) -> None:
     """Unknown profiles are skipped in memory without rewriting stored data."""
     custom = dict(store_module.DEFAULT_PROFILE_PAYLOAD)
@@ -100,8 +113,8 @@ def test_load_preserves_storage_when_a_profile_is_rejected(store_module) -> None
     assert FakeStore.saved is None
 
 
-def test_load_migrates_robot_theme_to_holographic(store_module) -> None:
-    """Retired Robot assignments remain usable with the Holographic theme."""
+def test_load_migrates_free_robot_theme_to_neon(store_module) -> None:
+    """A Free display cannot inherit the paid Biofects HUD theme."""
     FakeStore.loaded = {
         "profiles": [store_module.DEFAULT_PROFILE_PAYLOAD],
         "displays": [{
@@ -118,10 +131,68 @@ def test_load_migrates_robot_theme_to_holographic(store_module) -> None:
 
     asyncio.run(store.async_load())
 
-    assert store.display_themes == {"wall-tablet": "holographic_interface"}
-    assert FakeStore.saved["display_themes"] == {
-        "wall-tablet": "holographic_interface"
+    assert store.display_themes == {"wall-tablet": "butler_neon"}
+    assert FakeStore.saved["display_themes"] == {"wall-tablet": "butler_neon"}
+
+
+def test_load_migrates_paid_robot_theme_to_biofects_hud(store_module) -> None:
+    """A Paid display keeps the replacement for its retired Robot selection."""
+    FakeStore.loaded = {
+        "profiles": [store_module.DEFAULT_PROFILE_PAYLOAD],
+        "displays": [{
+            "display_id": "wall-tablet",
+            "name": "Wall Tablet",
+            "model": "UniFi Connect",
+            "viewport_class": "expanded",
+            "renderer_schema_version": 1,
+            "edition": "paid",
+        }],
+        "assignments": {"wall-tablet": "default"},
+        "display_themes": {"wall-tablet": "robot_butler"},
     }
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+
+    asyncio.run(store.async_load())
+
+    assert store.display_themes == {"wall-tablet": "biofects_hud"}
+    assert FakeStore.saved["display_themes"] == {"wall-tablet": "biofects_hud"}
+
+
+def test_load_collapses_duplicate_fingerprints_to_paid_display(store_module) -> None:
+    """Stored cross-edition rows collapse before clients reconnect."""
+    shared = {
+        "name": "Amzn Echo Show 8",
+        "model": "Echo Show 8",
+        "viewport_class": "medium",
+        "renderer_schema_version": 1,
+    }
+    FakeStore.loaded = {
+        "profiles": [store_module.DEFAULT_PROFILE_PAYLOAD],
+        "displays": [
+            {**shared, "display_id": "echo-free", "device_key": "echo-free"},
+            {
+                **shared,
+                "display_id": "echo-paid",
+                "device_key": "echo-paid",
+                "edition": "paid",
+            },
+        ],
+        "assignments": {"echo-free": "default", "echo-paid": "default"},
+        "display_themes": {
+            "echo-free": "butler_neon",
+            "echo-paid": "biofects_hud",
+        },
+    }
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+
+    asyncio.run(store.async_load())
+
+    assert [display.display_id for display in store.displays] == ["echo-paid"]
+    assert store.assignments == {"echo-paid": "default"}
+    assert store.display_themes == {"echo-paid": "biofects_hud"}
+    assert [display["display_id"] for display in FakeStore.saved["displays"]] == [
+        "echo-paid"
+    ]
 
 
 def test_upsert_and_assignment_persist_complete_snapshot(store_module) -> None:
@@ -158,6 +229,43 @@ def test_upsert_and_assignment_persist_complete_snapshot(store_module) -> None:
         "default",
         "kitchen",
     ]
+
+
+def test_biofects_hud_requires_paid_display(store_module) -> None:
+    """Free displays cannot assign the paid-only Biofects HUD theme."""
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(store.async_load())
+    asyncio.run(store.async_register_display({
+        "display_id": "free-tablet",
+        "name": "Free Tablet",
+        "model": "SM-T733",
+        "viewport_class": "medium",
+        "renderer_schema_version": 1,
+    }))
+
+    with pytest.raises(
+        store_module.ProfileValidationError,
+        match="requires the Paid edition",
+    ):
+        asyncio.run(store.async_assign("free-tablet", "default", "biofects_hud"))
+
+
+def test_paid_display_can_assign_biofects_hud(store_module) -> None:
+    """Paid displays can assign the Biofects HUD theme."""
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(store.async_load())
+    asyncio.run(store.async_register_display({
+        "display_id": "paid-tablet",
+        "name": "Paid Tablet",
+        "model": "SM-T733",
+        "viewport_class": "medium",
+        "renderer_schema_version": 1,
+        "edition": "paid",
+    }))
+
+    asyncio.run(store.async_assign("paid-tablet", "default", "biofects_hud"))
+
+    assert store.display_themes == {"paid-tablet": "biofects_hud"}
 
 
 def test_delete_display_clears_registration_assignment_and_theme(store_module) -> None:
@@ -221,7 +329,6 @@ def test_paid_registration_is_not_subject_to_free_device_limit(store_module) -> 
     store = store_module.DashboardProfileStore(SimpleNamespace())
     asyncio.run(store.async_load())
     registration = {
-        "name": "Display",
         "model": "Android",
         "viewport_class": "medium",
         "renderer_schema_version": 1,
@@ -229,10 +336,13 @@ def test_paid_registration_is_not_subject_to_free_device_limit(store_module) -> 
 
     for display_id in ("free-one", "free-two"):
         asyncio.run(store.async_register_display({
-            **registration, "display_id": display_id,
+            **registration, "display_id": display_id, "name": display_id,
         }))
     paid = asyncio.run(store.async_register_display({
-        **registration, "display_id": "paid-three", "edition": "paid",
+        **registration,
+        "display_id": "paid-three",
+        "name": "paid-three",
+        "edition": "paid",
     }))
 
     assert paid.edition == "paid"
@@ -330,6 +440,61 @@ def test_reregistration_deduplicates_matching_device_key(store_module) -> None:
         )
 
     assert [display.display_id for display in store.displays] == ["android_second"]
+
+
+def test_reregistration_deduplicates_signing_scoped_device_keys(store_module) -> None:
+    """One physical display remains one row across differently signed APKs."""
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(store.async_load())
+
+    for display_id in ("android_debug_key", "android_release_key"):
+        asyncio.run(store.async_register_display({
+            "display_id": display_id,
+            "device_key": display_id,
+            "name": "samsung SM-T733",
+            "model": "SM-T733",
+            "viewport_class": "medium",
+            "renderer_schema_version": 1,
+        }))
+
+    assert [display.display_id for display in store.displays] == [
+        "android_release_key"
+    ]
+
+
+def test_paid_registration_wins_same_device_reregistration(store_module) -> None:
+    """A stale Free APK cannot replace the Paid row for one physical display."""
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(store.async_load())
+    shared = {
+        "name": "Amzn Echo Show 8",
+        "model": "Echo Show 8",
+        "viewport_class": "medium",
+        "renderer_schema_version": 1,
+    }
+    asyncio.run(store.async_register_display({
+        **shared,
+        "display_id": "android_free_key",
+        "device_key": "android_free_key",
+    }))
+    asyncio.run(store.async_register_display({
+        **shared,
+        "display_id": "android_paid_key",
+        "device_key": "android_paid_key",
+        "edition": "paid",
+    }))
+
+    registered = asyncio.run(store.async_register_display({
+        **shared,
+        "display_id": "android_free_key",
+        "device_key": "android_free_key",
+    }))
+
+    assert registered.display_id == "android_paid_key"
+    assert registered.edition == "paid"
+    assert [display.display_id for display in store.displays] == [
+        "android_paid_key"
+    ]
 
 
 def test_first_keyed_registration_collapses_matching_legacy_records(store_module) -> None:

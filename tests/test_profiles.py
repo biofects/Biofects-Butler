@@ -234,8 +234,19 @@ def test_legacy_holographic_theme_is_accepted_but_not_serialized() -> None:
     assert "theme" not in profile.as_dict()
 
 
+def test_biofects_hud_theme_is_accepted() -> None:
+    """The Biofects HUD presentation is assignable as the third theme."""
+    module = load_profiles_module()
+    payload = valid_profile()
+    payload["theme"] = "biofects_hud"
+
+    profile = module.parse_dashboard_profile(payload)
+
+    assert profile.theme == "biofects_hud"
+
+
 def test_robot_butler_theme_is_rejected() -> None:
-    """The retired Robot presentation cannot be assigned to a display."""
+    """The retired Robot presentation cannot be newly assigned."""
     module = load_profiles_module()
     payload = valid_profile()
     payload["theme"] = "robot_butler"
