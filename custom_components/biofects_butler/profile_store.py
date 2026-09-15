@@ -462,7 +462,7 @@ class DashboardProfileStore:
                 theme == "biofects_hud"
                 and self._displays[display_id].edition != "paid"
             ):
-                raise ProfileValidationError("Biofects HUD requires the Paid edition")
+                raise ProfileValidationError("Biofects Aurora requires the Paid edition")
             assignments = {**self._assignments, display_id: profile_id}
             display_themes = {
                 **self._display_themes,

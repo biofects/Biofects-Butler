@@ -114,7 +114,7 @@ def test_load_preserves_storage_when_a_profile_is_rejected(store_module) -> None
 
 
 def test_load_migrates_free_robot_theme_to_neon(store_module) -> None:
-    """A Free display cannot inherit the paid Biofects HUD theme."""
+    """A Free display cannot inherit the paid Biofects Aurora theme."""
     FakeStore.loaded = {
         "profiles": [store_module.DEFAULT_PROFILE_PAYLOAD],
         "displays": [{
@@ -232,7 +232,7 @@ def test_upsert_and_assignment_persist_complete_snapshot(store_module) -> None:
 
 
 def test_biofects_hud_requires_paid_display(store_module) -> None:
-    """Free displays cannot assign the paid-only Biofects HUD theme."""
+    """Free displays cannot assign the paid-only Biofects Aurora theme."""
     store = store_module.DashboardProfileStore(SimpleNamespace())
     asyncio.run(store.async_load())
     asyncio.run(store.async_register_display({
@@ -251,7 +251,7 @@ def test_biofects_hud_requires_paid_display(store_module) -> None:
 
 
 def test_paid_display_can_assign_biofects_hud(store_module) -> None:
-    """Paid displays can assign the Biofects HUD theme."""
+    """Paid displays can assign the Biofects Aurora theme."""
     store = store_module.DashboardProfileStore(SimpleNamespace())
     asyncio.run(store.async_load())
     asyncio.run(store.async_register_display({

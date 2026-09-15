@@ -235,7 +235,7 @@ def test_legacy_holographic_theme_is_accepted_but_not_serialized() -> None:
 
 
 def test_biofects_hud_theme_is_accepted() -> None:
-    """The Biofects HUD presentation is assignable as the third theme."""
+    """The Biofects Aurora presentation is assignable as the third theme."""
     module = load_profiles_module()
     payload = valid_profile()
     payload["theme"] = "biofects_hud"

@@ -146,14 +146,27 @@ class BiofectsButlerPanel extends HTMLElement {
     this._wireImport();
     this._wireQuickCommandPanels();
     this._clarifyPopupDetails();
+    this._simplifyTapControls();
     this._updateSelectors();
   }
 
   _clarifyPopupDetails() {
     const heading = this.shadowRoot.querySelector(".attribute-picker h3");
     if (!heading) return;
-    heading.textContent = "CARD + OPEN CONTROLS DETAILS";
-    heading.nextElementSibling.textContent = "Select up to 20 state attributes for the card and Open controls. With none selected, Open controls uses useful defaults for the entity type.";
+    heading.textContent = "CARD + CONTROL DETAILS";
+    heading.nextElementSibling.textContent = "Tap opens controls by default. When tap is assigned to an action, press and hold opens controls instead.";
+  }
+
+  _simplifyTapControls() {
+    this.shadowRoot.querySelectorAll("select[data-binding-tap-mode]").forEach((select) => {
+      select.querySelector('option[value="more_info"]')?.remove();
+      const defaultOption = select.querySelector('option[value="none"]');
+      if (defaultOption) defaultOption.textContent = "Default: open controls";
+      const toggleOption = select.querySelector('option[value="toggle"]');
+      if (toggleOption) toggleOption.textContent = "Toggle / run (hold for controls)";
+      const activateOption = select.querySelector('option[value="activate"]');
+      if (activateOption) activateOption.textContent = "Activate (hold for controls)";
+    });
   }
 
   _workspaceEditor({ profiles, displays, dashboards, profileButtons }) {
@@ -462,7 +475,7 @@ class BiofectsButlerPanel extends HTMLElement {
       <div class="drag-handle" title="Drag to reorder or move">⠿</div>
       <ha-icon icon="${escapeHtml(icon)}"></ha-icon>
       <div class="entity-copy"><strong>${escapeHtml(name)}</strong><small>${escapeHtml(stateText)}</small>${(binding.entity_ids || []).length > 1 ? `<small class="attribute-summary">${binding.entity_ids.length} ENTITIES</small>` : attributeSummary ? `<small class="attribute-summary">${escapeHtml(attributeSummary)}</small>` : ""}</div>
-      <span class="tap-mode">${tapAction ? label(tapAction.type) : "NO TAP"}</span>
+      <span class="tap-mode">${tapAction && tapAction.type !== "more_info" ? label(tapAction.type) : "TAP: CONTROLS"}</span>
       <button class="card-settings" title="Edit card" data-action="edit-binding" data-screen="${screenIndex}" data-section="${sectionIndex}" data-binding="${bindingIndex}"><ha-icon icon="mdi:cog-outline"></ha-icon></button>
     </div>`;
   }
@@ -496,7 +509,8 @@ class BiofectsButlerPanel extends HTMLElement {
     const state = this._hass?.states?.[binding.target_id];
     const name = state?.attributes?.friendly_name || binding.target_id;
     const icon = binding.icon || state?.attributes?.icon || this._defaultIcon(binding.target_id, state?.attributes?.device_class);
-    const tapMode = (section.actions || []).find((action) => action.gesture === "tap" && ["more_info", "toggle", "activate"].includes(action.type) && action.target_id === binding.target_id)?.type || "none";
+    const storedTapMode = (section.actions || []).find((action) => action.gesture === "tap" && ["more_info", "toggle", "activate"].includes(action.type) && action.target_id === binding.target_id)?.type || "none";
+    const tapMode = storedTapMode === "more_info" ? "none" : storedTapMode;
     const graphType = binding.graph_type || "auto";
     const role = binding.role || "none";
     const hiddenAttributes = new Set(["attribution", "device_class", "friendly_name", "icon", "supported_features"]);
@@ -572,7 +586,7 @@ class BiofectsButlerPanel extends HTMLElement {
     return `<div class="assignments"><h2>Displays</h2>${displays.map((display) => {
       const assigned = this._snapshot.assignments?.[display.display_id] || "default";
       const theme = this._snapshot.display_themes?.[display.display_id] || "butler_neon";
-      return `<div class="display"><span><strong>${escapeHtml(display.name)}</strong><small>${escapeHtml(display.model)} / ${escapeHtml(display.viewport_class)}</small><small>${escapeHtml(display.display_id)}</small></span><label>Dashboard<select data-display-profile="${escapeHtml(display.display_id)}">${profiles.map((profile) => `<option value="${escapeHtml(profile.profile_id)}" ${profile.profile_id === assigned ? "selected" : ""}>${escapeHtml(profile.name)}</option>`).join("")}</select></label><label>Theme<select data-display-theme="${escapeHtml(display.display_id)}"><option value="butler_neon" ${theme === "butler_neon" ? "selected" : ""}>Butler Neon</option><option value="holographic_interface" ${theme === "holographic_interface" ? "selected" : ""}>Holographic Interface</option>${display.edition === "paid" ? `<option value="biofects_hud" ${theme === "biofects_hud" ? "selected" : ""}>Biofects HUD</option>` : ""}</select></label><button class="icon danger" title="Delete display" data-action="delete-display" data-display-id="${escapeHtml(display.display_id)}" data-display-name="${escapeHtml(display.name)}"><ha-icon icon="mdi:delete-outline"></ha-icon></button></div>`;
+      return `<div class="display"><span><strong>${escapeHtml(display.name)}</strong><small>${escapeHtml(display.model)} / ${escapeHtml(display.viewport_class)}</small><small>${escapeHtml(display.display_id)}</small></span><label>Dashboard<select data-display-profile="${escapeHtml(display.display_id)}">${profiles.map((profile) => `<option value="${escapeHtml(profile.profile_id)}" ${profile.profile_id === assigned ? "selected" : ""}>${escapeHtml(profile.name)}</option>`).join("")}</select></label><label>Theme<select data-display-theme="${escapeHtml(display.display_id)}"><option value="butler_neon" ${theme === "butler_neon" ? "selected" : ""}>Butler Neon</option><option value="holographic_interface" ${theme === "holographic_interface" ? "selected" : ""}>Holographic Interface</option>${display.edition === "paid" ? `<option value="biofects_hud" ${theme === "biofects_hud" ? "selected" : ""}>Biofects Aurora</option>` : ""}</select></label><button class="icon danger" title="Delete display" data-action="delete-display" data-display-id="${escapeHtml(display.display_id)}" data-display-name="${escapeHtml(display.name)}"><ha-icon icon="mdi:delete-outline"></ha-icon></button></div>`;
     }).join("")}</div>`;
   }
 
@@ -881,7 +895,7 @@ class BiofectsButlerPanel extends HTMLElement {
     if (element.dataset.bindingToggle !== undefined) {
       const section = this._draft.screens[Number(element.dataset.screen)].sections[Number(element.dataset.section)];
       const binding = section.bindings[Number(element.dataset.binding)];
-      this._setBindingTapAction(section, binding.target_id, element.checked ? "toggle" : "more_info");
+      this._setBindingTapAction(section, binding.target_id, element.checked ? "toggle" : "none");
       this._render();
       return;
     }
