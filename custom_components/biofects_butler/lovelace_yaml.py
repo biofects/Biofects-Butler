@@ -175,11 +175,14 @@ def _actions_from_card(card: dict[str, Any]) -> list[dict[str, Any]]:
             domain, service_name = service.split(".", 1)
             target = tap_action.get("target")
             target_id = target.get("entity_id") if isinstance(target, dict) else entity_id
+            if isinstance(target_id, list):
+                target_id = next((item for item in target_id if isinstance(item, str)), None)
             return [{
                 **base,
                 "type": "call_service",
                 "domain": domain,
                 "service": service_name,
+                **({"source_id": entity_id} if isinstance(entity_id, str) and ENTITY_PATTERN.fullmatch(entity_id) else {}),
                 **({"target_id": target_id} if isinstance(target_id, str) and ENTITY_PATTERN.fullmatch(target_id) else {}),
                 **({"data": tap_action["data"]} if isinstance(tap_action.get("data"), dict) else {}),
             }]

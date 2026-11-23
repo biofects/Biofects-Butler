@@ -7,6 +7,8 @@ from dataclasses import asdict, dataclass
 from homeassistant import loader
 from homeassistant.core import HomeAssistant
 
+from .const import CONF_CUSTOM_WAKE_WORD_URLS, DOMAIN
+
 
 @dataclass(frozen=True, slots=True)
 class BackendDefinition:
@@ -92,4 +94,14 @@ async def async_get_setup_options(hass: HomeAssistant) -> dict:
             }
         )
 
-    return {"version": 1, "backends": options}
+    entries = [
+        entry
+        for entry in hass.config_entries.async_entries()
+        if entry.domain == DOMAIN
+    ]
+    model_urls = entries[0].options.get(CONF_CUSTOM_WAKE_WORD_URLS, []) if entries else []
+    return {
+        "version": 1,
+        "backends": options,
+        "custom_wake_word_urls": [url for url in model_urls if isinstance(url, str)],
+    }

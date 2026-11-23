@@ -117,6 +117,33 @@ cards:
     assert result["actions"][1]["type"] == "toggle"
 
 
+def test_converts_perform_action_source_and_target() -> None:
+        result = convert_lovelace_yaml(
+                """type: button
+name: AC Cooler
+entity: switch.hose_timers_zone_ac_cooler
+tap_action:
+    action: perform-action
+    perform_action: automation.trigger
+    target:
+        entity_id: automation.ac_cooler_temperature_control
+    data:
+        skip_condition: true
+"""
+        )
+
+        assert result["actions"] == [{
+                "gesture": "tap",
+                "name": "AC Cooler",
+                "type": "call_service",
+                "domain": "automation",
+                "service": "trigger",
+                "source_id": "switch.hose_timers_zone_ac_cooler",
+                "target_id": "automation.ac_cooler_temperature_control",
+                "data": {"skip_condition": True},
+        }]
+
+
 def test_rejects_standard_card_without_convertible_content() -> None:
     """Cards without native entities or actions receive a useful error."""
     with pytest.raises(LovelaceYamlError, match="no entities or actions"):

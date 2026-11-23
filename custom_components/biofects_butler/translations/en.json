@@ -37,12 +37,16 @@
     "abort": {
       "no_configured_backends": "No configured conversation backends are available. Rerun Butler configuration after adding one."
     },
+    "error": {
+      "invalid_wake_word_urls": "Enter up to three unique direct HTTP or HTTPS microWakeWord manifest URLs, one per line."
+    },
     "step": {
       "init": {
         "data": {
-          "conversation_backend": "Conversation backend"
+          "conversation_backend": "Conversation backend",
+          "custom_wake_word_urls": "Custom on-device wake word model URLs"
         },
-        "description": "Choose from conversation backends already configured in Home Assistant.",
+        "description": "Choose a configured conversation backend. Optionally add up to three direct microWakeWord v2 JSON manifest URLs, one per line. Butler downloads their models to connected devices.",
         "title": "Butler options"
       }
     }

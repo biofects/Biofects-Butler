@@ -1,8 +1,43 @@
+// Same placement rules as Android DashboardGrid: pinned panels reserve cells before automatic ones.
+function dashboardGridPlacements(screen, columns = Number(screen.grid_columns || 4)) {
+  const configured = Number(screen.grid_columns || 4);
+  const responsive = columns !== configured;
+  const occupied = new Set();
+  const placements = [];
+  const order = screen.sections.map((section, index) => ({section, index})).sort((a, b) =>
+    Number(!responsive && (b.section.grid_column > 0 || b.section.grid_row > 0)) - Number(!responsive && (a.section.grid_column > 0 || a.section.grid_row > 0)));
+  for (const {section, index} of order) {
+    const width = Math.min(columns, Math.max(1, Math.ceil(Number(section.column_span || 2) * columns / configured)));
+    const height = Math.min(8, Math.max(1, Number(section.row_span || 1)));
+    const pinnedColumn = !responsive && section.grid_column > 0 ? Math.min(Number(section.grid_column) - 1, columns - width) : null;
+    let row = responsive ? 0 : Math.max(0, Number(section.grid_row || 0) - 1);
+    let column;
+    while (column === undefined) {
+      const candidates = pinnedColumn === null ? Array.from({length: columns - width + 1}, (_, x) => x) : [pinnedColumn];
+      column = candidates.find((x) => {
+        for (let y = row; y < row + height; y++) for (let col = x; col < x + width; col++) if (occupied.has(`${col},${y}`)) return false;
+        return true;
+      });
+      if (column === undefined) row++;
+    }
+    for (let y = row; y < row + height; y++) for (let col = column; col < column + width; col++) occupied.add(`${col},${y}`);
+    placements[index] = {column, row, width, height};
+  }
+  return placements;
+}
+
+const SIMPSONS_CHARACTERS = {simpsons_homer:"Homer", simpsons_marge:"Marge", simpsons_bart:"Bart", simpsons_lisa:"Lisa", simpsons_maggie:"Maggie"};
+const SIMPSONS_BACKGROUNDS = {plain:"Blue background", house:"Simpsons’ house", kwik_e_mart:"Kwik-E-Mart"};
+const BENDER_BACKGROUNDS = {plain:"Plain teal", planet_express:"Planet Express", new_new_york:"New New York at night", robot_bar:"Robot bar"};
+const PICKLE_RICK_BACKGROUNDS = {plain:"Plain green", garage:"Rick’s garage", portal_world:"Portal world", sewer_lab:"Sewer lab"};
+const DISPLAY_THEMES = ["pickle_rick", ...Object.keys(PICKLE_RICK_BACKGROUNDS).filter(key => key !== "plain").map(key => `pickle_rick__${key}`), "futurama_bender", ...Object.keys(BENDER_BACKGROUNDS).filter(key => key !== "plain").map(key => `futurama_bender__${key}`), "hal_9000", "butler_neon", "holographic_interface", "companion", "butler", ...Object.keys(SIMPSONS_CHARACTERS), ...Object.keys(SIMPSONS_CHARACTERS).flatMap(character => ["house", "kwik_e_mart"].map(background => `${character}__${background}`))];
+
 const COMPOSITIONS = {
   radial_command_overview: ["overview", "left_menu", "reactor", "right_menu", "media", "events"],
   security_camera_board: ["status", "camera_primary", "camera_grid", "controls", "events"],
   focused_control: ["left_instrument", "core", "right_instrument", "footer"],
   full_page: ["full_page"],
+  freeform_grid: [],
 };
 
 const LAYOUTS = {
@@ -10,6 +45,7 @@ const LAYOUTS = {
   security_camera_board: { name: "Camera & Security", description: "Status, cameras, controls and events" },
   focused_control: { name: "Room Controls", description: "Large central controls with supporting panels" },
   full_page: { name: "Full Page", description: "One panel fills the entire dashboard body" },
+  freeform_grid: { name: "Visual designer", description: "Drag panels and entities, resize, and change card behavior" },
 };
 
 const SLOT_LABELS = {
@@ -21,7 +57,7 @@ const SLOT_LABELS = {
 
 const SECTION_TYPES = [
   "status_overview", "orbital_menu", "entity_controls", "security", "climate",
-  "cameras", "media", "events", "weather", "power", "quick_commands", "calendar_form", "recipe_browser",
+  "cameras", "media", "events", "weather", "power", "quick_commands", "form", "calendar_form", "recipe_browser", "assistant", "heading", "text", "image",
 ];
 const ACTION_TYPES = ["more_info", "toggle", "activate", "navigate", "call_service"];
 const BINDING_ROLES = [
@@ -50,12 +86,16 @@ class BiofectsButlerPanel extends HTMLElement {
     this._loading = false;
     this._saving = false;
     this._activeScreenId = null;
-    this._activeWorkspace = "screens";
+    this._activeWorkspace = "dashboard";
     this._activeSectionSlot = null;
     this._editorDialog = null;
     this._iconBrowser = null;
     this._mdiIcons = [];
     this._setupOptions = null;
+    this._lovelaceDashboardPath = null;
+    this._lovelaceSource = null;
+    this._lovelaceViewIndex = 0;
+    this._lovelaceImportMode = "add";
   }
 
   set hass(value) {
@@ -73,6 +113,7 @@ class BiofectsButlerPanel extends HTMLElement {
     this.shadowRoot.addEventListener("click", (event) => this._onClick(event));
     this.shadowRoot.addEventListener("change", (event) => this._onChange(event));
     this.shadowRoot.addEventListener("input", (event) => this._onInput(event));
+    this.shadowRoot.addEventListener("pointerdown", (event) => this._onCanvasResize(event));
     this.shadowRoot.addEventListener("dragstart", (event) => this._onDragStart(event));
     this.shadowRoot.addEventListener("dragover", (event) => this._onDragOver(event));
     this.shadowRoot.addEventListener("drop", (event) => this._onDrop(event));
@@ -116,15 +157,19 @@ class BiofectsButlerPanel extends HTMLElement {
     const dashboards = Object.entries(this._hass?.panels || {})
       .filter(([, panel]) => panel.component_name === "lovelace")
       .map(([path, panel]) => ({ path, title: panel.title || panel.config?.title || label(path) }));
-    const profileOptions = profiles.map((profile) =>
-      `<option value="${escapeHtml(profile.profile_id)}" ${profile.profile_id === this._selectedId ? "selected" : ""}>${escapeHtml(profile.name)}</option>`,
-    ).join("");
     const profileButtons = profiles.map((profile) =>
       `<button class="profile-choice ${profile.profile_id === this._selectedId ? "selected" : ""}" data-action="select-profile-button" data-profile-id="${escapeHtml(profile.profile_id)}"><ha-icon icon="${profile.profile_id === this._selectedId ? "mdi:radiobox-marked" : "mdi:radiobox-blank"}"></ha-icon><span>${escapeHtml(profile.name)}</span></button>`,
     ).join("");
 
     this.shadowRoot.innerHTML = `
-      <style>${this._styles()}</style>
+      <style>${this._styles()}
+      .display-editor-context{display:flex;gap:20px;align-items:center;border:1px solid var(--line);padding:14px;margin-bottom:16px;background:#0a1d29}.display-editor-context>label{min-width:230px;margin:0}.display-editor-context>div{display:flex;flex-direction:column;gap:7px}.display-editor-context small{line-height:1.5}.shared-profile-note{color:#e6c986}.preview-content-list{display:flex;flex-direction:column;gap:7px;width:100%;overflow:hidden}.preview-content-card{display:flex;align-items:center;gap:6px;padding:8px;border:1px solid #48778b;border-radius:10px;background:#192e40}.preview-content-card>span{display:flex;flex-direction:column;gap:4px;min-width:0}.preview-content-card b{font-size:10px;font-weight:600}.preview-content-card small{font-size:9px}.preview-content-card ha-icon,.preview-command ha-icon{--mdc-icon-size:18px;flex-shrink:0}.preview-command{display:flex;align-items:center;gap:7px;padding:9px;border:1px solid #6e9cad;border-radius:12px}.preview-panel-title{font-size:11px;font-weight:600;align-self:start}.preview-robot-art{height:80%;width:100%;max-height:290px}.preview-reactor-art{font-size:65px!important;color:#78edff;align-self:center}.layout-preview .preview-stage.arrangement-companion{height:auto;min-height:340px;aspect-ratio:16/10;background:linear-gradient(120deg,#111e30,#263f53,#171a31)}.arrangement-companion .preview-slot{justify-content:start;border-radius:14px;gap:10px;overflow:hidden;background:#172638;padding:10px}.arrangement-companion .slot-reactor{border-color:transparent;background:transparent;align-items:center}.arrangement-companion .preview-navigation{grid-area:navigation;display:flex;gap:10px;align-items:center;overflow:hidden;border-top:1px solid #48778b;font-size:8px}.preview-caption{display:block;margin-top:10px;line-height:1.5}@container(max-width:700px){.display-editor-context{flex-direction:column;align-items:stretch}.display-editor-context>label{min-width:0}.preview-content-card{padding:4px}.preview-content-card b{font-size:8px}}
+
+      .preview-stage.radial_command_overview.arrangement-companion{grid-template-columns:32fr 32fr 36fr;grid-template-rows:1fr 1fr 32px;grid-template-areas:"overview media reactor" "overview events reactor" "navigation navigation navigation"}
+      .preview-stage.radial_command_overview.arrangement-console{grid-template-columns:25fr 43fr 32fr;grid-template-rows:1fr 1fr 32px;grid-template-areas:"reactor overview media" "reactor overview events" "left_menu left_menu right_menu"}
+      .preview-stage.radial_command_overview.arrangement-observatory{grid-template-columns:62fr 38fr;grid-template-rows:2fr 1fr 1fr 32px;grid-template-areas:"reactor overview" "reactor media" "reactor events" "left_menu right_menu"}
+      .preview-stage.radial_command_overview.arrangement-wings{grid-template-columns:23fr 50fr 27fr;grid-template-rows:1fr 1fr 32px;grid-template-areas:"overview reactor media" "overview reactor events" "left_menu left_menu right_menu"}
+</style>
       <main>
         <header class="page-header">
           <div>
@@ -134,18 +179,25 @@ class BiofectsButlerPanel extends HTMLElement {
         </header>
         ${this._message ? `<div class="notice">${escapeHtml(this._message)}</div>` : ""}
         <nav class="task-tabs" aria-label="Configuration sections">
-          ${[["profiles", "Profiles", "mdi:account-multiple-outline"], ["screens", "Screens", "mdi:view-dashboard-outline"], ["displays", "Displays", "mdi:monitor-cellphone"], ["integrations", "Integrations", "mdi:puzzle-outline"], ["advanced", "Advanced", "mdi:cog-outline"]].map(([id, title, icon]) => `<button class="task-tab ${this._activeWorkspace === id ? "selected" : ""}" data-action="select-workspace" data-workspace="${id}"><ha-icon icon="${icon}"></ha-icon>${title}</button>`).join("")}
+          ${[["dashboard", "Dashboard", "mdi:view-dashboard-outline"], ["screens", "Customize", "mdi:tune-variant"], ["profiles", "Profiles", "mdi:account-multiple-outline"], ["displays", "Displays", "mdi:monitor-cellphone"], ["more", "More", "mdi:dots-horizontal"]].map(([id, title, icon]) => {
+            const selected = this._activeWorkspace === id || (id === "more" && ["integrations", "advanced"].includes(this._activeWorkspace));
+            return `<button class="task-tab ${selected ? "selected" : ""}" data-action="select-workspace" data-workspace="${id}"><ha-icon icon="${icon}"></ha-icon>${title}</button>`;
+          }).join("")}
         </nav>
-        ${this._draft ? `<div class="profile-context"><label>EDITING PROFILE<select data-action="select-profile">${profileOptions}</select></label><span>${escapeHtml(this._draft.screens.length)} screens</span><button class="primary" data-action="save" ${this._saving ? "disabled" : ""}>${this._saving ? "Saving..." : "Save Profile"}</button></div>` : ""}
+        ${this._draft ? `<div class="profile-context"><div class="profile-context-picker"><label>EDITING PROFILE</label><div class="profile-context-choices">${profileButtons}</div></div><span>${escapeHtml(this._draft.screens.length)} screens</span><button class="primary" data-action="save" ${this._saving ? "disabled" : ""}>${this._saving ? "Saving..." : "Save Profile"}</button></div>` : ""}
         <section class="task-workspace">
           ${this._workspaceEditor({ profiles, displays, dashboards, profileButtons })}
         </section>
         <input id="import-file" type="file" accept="application/json" hidden>
       </main>
       <datalist id="mdi-icon-options">${this._mdiIcons.map((icon) => `<option value="${escapeHtml(icon)}"></option>`).join("")}</datalist>`;
+    this.shadowRoot.querySelector(".canvas-options")?.addEventListener("toggle", (event) => { this._canvasOptionsOpen = event.target.open; });
+    this.shadowRoot.querySelector(".visual-advanced")?.addEventListener("toggle", (event) => { this._panelAdvancedOpen = event.target.open; });
     this._wireImport();
     this._wireQuickCommandPanels();
     this._clarifyPopupDetails();
+    this._addBindingPresentationControls();
+    this._addFreeformLayoutControls();
     this._simplifyTapControls();
     this._updateSelectors();
   }
@@ -157,8 +209,59 @@ class BiofectsButlerPanel extends HTMLElement {
     heading.nextElementSibling.textContent = "Tap opens controls by default. When tap is assigned to an action, press and hold opens controls instead.";
   }
 
+  _addBindingPresentationControls() {
+    const nameInput = this.shadowRoot.querySelector(".editor-modal [data-binding-name]");
+    if (!nameInput || this.shadowRoot.querySelector("[data-binding-group]")) return;
+    const binding = this._bindingAt(nameInput);
+    const location = `data-screen="${nameInput.dataset.screen}" data-section="${nameInput.dataset.section}" data-binding="${nameInput.dataset.binding}"`;
+    const group = document.createElement("label");
+    group.innerHTML = `PANEL GROUP<input data-binding-group ${location} value="${escapeHtml(binding.group || "")}" placeholder="Optional group heading" maxlength="100">`;
+    const display = document.createElement("label");
+    display.innerHTML = `DISPLAY AS<select data-binding-display-mode ${location}><option value="row" ${binding.display_mode !== "tile" ? "selected" : ""}>Information row</option><option value="tile" ${binding.display_mode === "tile" ? "selected" : ""}>Compact button</option></select>`;
+    const appearance = document.createElement("details");
+    appearance.className = "tile-appearance-settings";
+    appearance.innerHTML = `<summary>Tile size and shape</summary><div class="tile-appearance-fields"><label>WIDTH<select data-binding-card-width ${location}>${[1, 2, 3, 4].map((width) => `<option value="${width}" ${Number(binding.card_width || 2) === width ? "selected" : ""}>${width} columns</option>`).join("")}</select></label><label>HEIGHT<select data-binding-card-height ${location}>${[1, 2].map((height) => `<option value="${height}" ${Number(binding.card_height || 1) === height ? "selected" : ""}>${height} rows</option>`).join("")}</select></label><label>SHAPE<select data-binding-card-shape ${location}>${[["cut", "Angled"], ["square", "Square"], ["rounded", "Rounded"]].map(([shape, title]) => `<option value="${shape}" ${(binding.card_shape || "cut") === shape ? "selected" : ""}>${title}</option>`).join("")}</select></label></div>`;
+    nameInput.parentElement.after(group, display, appearance);
+  }
+
+  _addFreeformLayoutControls() {
+    this.shadowRoot.querySelectorAll(".panel-controls").forEach((controls) => {
+      if (controls.querySelector("[data-freeform-dimensions]")) return;
+      const moveButton = controls.querySelector('[data-action="move-section"]');
+      if (!moveButton) return;
+      const screenIndex = Number(moveButton.dataset.screen);
+      const sectionIndex = Number(moveButton.dataset.index);
+      const screen = this._draft?.screens[screenIndex];
+      const section = screen?.sections[sectionIndex];
+      if (screen?.composition !== "freeform_grid" || !section) return;
+      const dimensions = document.createElement("div");
+      dimensions.className = "panel-dimensions";
+      dimensions.dataset.freeformDimensions = "";
+      [["column_span", "WIDTH", 1, Number(screen.grid_columns || 4), 2], ["row_span", "HEIGHT", 1, 8, 1], ["grid_column", "START COLUMN", 0, Number(screen.grid_columns || 4), 0], ["grid_row", "START ROW", 0, 40, 0]].forEach(([field, title, minimum, maximum, fallback]) => {
+        const labelElement = document.createElement("label");
+        labelElement.className = "panel-dimension";
+        const span = document.createElement("span");
+        span.textContent = title;
+        const select = document.createElement("select");
+        select.dataset.screen = String(screenIndex);
+        select.dataset.section = String(sectionIndex);
+        select.dataset.field = field;
+        for (let value = minimum; value <= maximum; value += 1) {
+          const option = document.createElement("option");
+          option.value = String(value);
+          option.textContent = value === 0 ? "Automatic" : String(value);
+          option.selected = Number(section[field] ?? fallback) === value;
+          select.append(option);
+        }
+        labelElement.append(span, select);
+        dimensions.append(labelElement);
+      });
+      controls.prepend(dimensions);
+    });
+  }
+
   _simplifyTapControls() {
-    this.shadowRoot.querySelectorAll("select[data-binding-tap-mode]").forEach((select) => {
+    this.shadowRoot.querySelectorAll(".editor-modal select[data-binding-tap-mode]").forEach((select) => {
       select.querySelector('option[value="more_info"]')?.remove();
       const defaultOption = select.querySelector('option[value="none"]');
       if (defaultOption) defaultOption.textContent = "Default: open controls";
@@ -170,11 +273,24 @@ class BiofectsButlerPanel extends HTMLElement {
   }
 
   _workspaceEditor({ profiles, displays, dashboards, profileButtons }) {
+    if (this._activeWorkspace === "dashboard") return this._dashboardWorkspace(dashboards);
     if (this._activeWorkspace === "profiles") return this._profilesWorkspace(profileButtons);
     if (this._activeWorkspace === "displays") return this._displayAssignments(displays, profiles);
-    if (this._activeWorkspace === "integrations") return this._conversationBackends();
-    if (this._activeWorkspace === "advanced") return this._advancedWorkspace(dashboards);
+    if (this._activeWorkspace === "more") return this._moreWorkspace();
+    if (this._activeWorkspace === "integrations") return `<div class="more-back"><button data-action="select-workspace" data-workspace="more">← More</button></div>${this._conversationBackends()}`;
+    if (this._activeWorkspace === "advanced") return `<div class="more-back"><button data-action="select-workspace" data-workspace="more">← More</button></div>${this._advancedWorkspace(dashboards)}`;
     return this._draft ? this._profileEditor() : "<div class='empty'>Create a profile before adding screens.</div>";
+  }
+
+  _moreWorkspace() {
+    return `<section class="settings-page"><div class="settings-heading"><div><p class="eyebrow">MORE OPTIONS</p><h2>Setup and maintenance</h2><p>These options are usually only needed during setup or when moving profiles.</p></div></div><div class="advanced-grid"><button class="more-option" data-action="select-workspace" data-workspace="integrations"><ha-icon icon="mdi:puzzle-outline"></ha-icon><span><strong>Conversation backends</strong><small>Check which Home Assistant voice backends are ready.</small></span><ha-icon icon="mdi:chevron-right"></ha-icon></button><button class="more-option" data-action="select-workspace" data-workspace="advanced"><ha-icon icon="mdi:swap-horizontal"></ha-icon><span><strong>Import or export profiles</strong><small>Move a profile between Home Assistant systems.</small></span><ha-icon icon="mdi:chevron-right"></ha-icon></button></div></section>`;
+  }
+
+  _dashboardWorkspace(dashboards) {
+    const selectedPath = this._lovelaceDashboardPath || dashboards[0]?.path || "";
+    const views = this._lovelaceSource?.path === selectedPath ? this._lovelaceSource.config.views || [] : [];
+    const selectedTarget = this._activeScreenId || this._draft?.default_screen_id || "";
+    return `<section class="settings-page"><div class="settings-heading"><div><p class="eyebrow">QUICK SETUP</p><h2>Build from Home Assistant</h2><p>Choose any Lovelace dashboard you maintain. Build a complete Butler profile, or import one new page into the profile you are editing.</p></div></div><div class="dashboard-start"><label>HOME ASSISTANT DASHBOARD<select id="lovelace-dashboard">${dashboards.map((dashboard) => `<option value="${escapeHtml(dashboard.path)}" ${dashboard.path === selectedPath ? "selected" : ""}>${escapeHtml(dashboard.title)}</option>`).join("")}</select></label><div class="button-row"><button class="primary" data-action="import-lovelace" ${dashboards.length ? "" : "disabled"}><ha-icon icon="mdi:auto-fix"></ha-icon>Build Complete Profile</button><button data-action="load-lovelace-pages" ${dashboards.length ? "" : "disabled"}><ha-icon icon="mdi:view-dashboard-outline"></ha-icon>Choose a Page</button></div>${dashboards.length ? "" : `<small>No Lovelace dashboards are available to import.</small>`}</div>${views.length ? `<div class="dashboard-import"><h2>Import one page</h2><p>Add a newly created Lovelace view without rebuilding the rest of this Butler profile, or replace one existing screen while keeping its navigation link.</p><label>LOVELACE PAGE<select id="lovelace-view">${views.map((view, index) => `<option value="${index}" ${index === this._lovelaceViewIndex ? "selected" : ""}>${escapeHtml(view.title || view.path || `Page ${index + 1}`)}</option>`).join("")}</select></label><label>IMPORT ACTION<select id="lovelace-import-mode"><option value="add" ${this._lovelaceImportMode === "add" ? "selected" : ""}>Add as a new Butler screen</option><option value="replace" ${this._lovelaceImportMode === "replace" ? "selected" : ""}>Replace an existing Butler screen</option></select></label><label>EXISTING BUTLER SCREEN<select id="lovelace-target-screen" ${this._lovelaceImportMode === "replace" ? "" : "disabled"}>${(this._draft?.screens || []).map((screen) => `<option value="${escapeHtml(screen.screen_id)}" ${screen.screen_id === selectedTarget ? "selected" : ""}>${escapeHtml(screen.title)}</option>`).join("")}</select></label><button class="primary" data-action="import-lovelace-page" ${this._draft ? "" : "disabled"}><ha-icon icon="mdi:page-next-outline"></ha-icon>${this._lovelaceImportMode === "replace" ? "Replace Butler Screen" : "Add Page to Profile"}</button>${this._draft ? "" : "<small>Build or select a Butler profile before importing one page.</small>"}</div>` : ""}<div class="home-mode-note"><ha-icon icon="mdi:tune-variant"></ha-icon><span><strong>Your customizations stay available</strong><small>Customize layouts, cards, entities, scenes, scripts, automations, and advanced panels before saving.</small></span></div></section>`;
   }
 
   _profilesWorkspace(profileButtons) {
@@ -182,18 +298,19 @@ class BiofectsButlerPanel extends HTMLElement {
     const weatherEntities = Object.values(this._hass?.states || {})
       .filter((state) => state.entity_id.startsWith("weather."))
       .sort((left, right) => (left.attributes.friendly_name || left.entity_id).localeCompare(right.attributes.friendly_name || right.entity_id));
-    return `<section class="settings-page"><div class="settings-heading"><div><p class="eyebrow">PROFILES</p><h2>Dashboard profiles</h2><p>Choose who and what this dashboard is configured for.</p></div><div class="button-row"><button data-action="new">New profile</button><button data-action="duplicate" ${profile ? "" : "disabled"}>Duplicate</button></div></div><div class="profiles-layout"><div class="profile-list"><label>AVAILABLE PROFILES</label><div class="profile-choices">${profileButtons}</div></div>${profile ? `<div class="profile-settings"><div class="field"><label>PROFILE NAME</label><input data-profile-field="name" value="${escapeHtml(profile.name)}"></div><div class="field"><label>GREETING WEATHER</label><select data-greeting-weather><option value="">No weather summary</option>${weatherEntities.map((state) => `<option value="${escapeHtml(state.entity_id)}" ${state.entity_id === profile.greeting_weather_entity_id ? "selected" : ""}>${escapeHtml(state.attributes.friendly_name || state.entity_id)}</option>`).join("")}</select></div><div class="field"><label>START SCREEN</label><div class="fixed-value">Home</div></div><button class="danger profile-delete" data-action="delete-profile" ${profile.profile_id === "default" ? "disabled" : ""}><ha-icon icon="mdi:delete-outline"></ha-icon>Delete profile</button></div>` : "<div class='empty'>No profile selected.</div>"}</div></section>`;
+    return `<section class="settings-page"><div class="settings-heading"><div><p class="eyebrow">PROFILES</p><h2>Dashboard profiles</h2><p>Create and save a profile here, then open Customize to edit its screens and cards.</p></div><div class="button-row"><button data-action="new">New profile</button><button data-action="duplicate" ${profile ? "" : "disabled"}>Duplicate</button><button class="primary" data-action="save" ${profile && !this._saving ? "" : "disabled"}>${this._saving ? "Saving..." : "Save Profile"}</button></div></div><div class="profiles-layout"><div class="profile-list"><label>AVAILABLE PROFILES</label><div class="profile-choices">${profileButtons}</div></div>${profile ? `<div class="profile-settings"><div class="field"><label>PROFILE NAME</label><input data-profile-field="name" value="${escapeHtml(profile.name)}"></div><div class="field"><label>GREETING WEATHER</label><select data-greeting-weather><option value="">No weather summary</option>${weatherEntities.map((state) => `<option value="${escapeHtml(state.entity_id)}" ${state.entity_id === profile.greeting_weather_entity_id ? "selected" : ""}>${escapeHtml(state.attributes.friendly_name || state.entity_id)}</option>`).join("")}</select></div><div class="field"><label>START SCREEN</label><div class="fixed-value">Home</div></div><button class="danger profile-delete" data-action="delete-profile" ${profile.profile_id === "default" ? "disabled" : ""}><ha-icon icon="mdi:delete-outline"></ha-icon>Delete profile</button></div>` : "<div class='empty'>No profile selected.</div>"}</div></section>`;
   }
 
   _advancedWorkspace(dashboards) {
-    return `<section class="settings-page"><div class="settings-heading"><div><p class="eyebrow">ADVANCED</p><h2>Import and maintenance</h2><p>Create from Home Assistant or move profile definitions between systems.</p></div></div><div class="advanced-grid"><article><h2>Start from HA dashboard</h2><p>Import a Lovelace dashboard as a new Butler draft.</p><select id="lovelace-dashboard">${dashboards.map((dashboard) => `<option value="${escapeHtml(dashboard.path)}">${escapeHtml(dashboard.title)}</option>`).join("")}</select><button data-action="import-lovelace" ${dashboards.length ? "" : "disabled"}>Create draft</button></article><article><h2>Profile file</h2><p>Import or export the selected profile as JSON.</p><div class="button-row"><button data-action="import">Import</button><button data-action="export" ${this._draft ? "" : "disabled"}>Export</button></div></article></div></section>`;
+    return `<section class="settings-page"><div class="settings-heading"><div><p class="eyebrow">ADVANCED</p><h2>Profile maintenance</h2><p>Move complete profile definitions between Home Assistant systems.</p></div></div><div class="advanced-grid"><article><h2>Profile file</h2><p>Import or export the selected profile as JSON.</p><div class="button-row"><button data-action="import">Import</button><button data-action="export" ${this._draft ? "" : "disabled"}>Export</button></div></article></div></section>`;
   }
 
   _profileEditor() {
     const profile = this._draft;
     const activeScreen = profile.screens.find((screen) => screen.screen_id === this._activeScreenId) || profile.screens[0];
     return `
-      <div class="screen-workspace"><aside class="screen-list"><div class="screen-list-heading"><label>SCREENS</label><button class="add-screen-tab" title="Add dashboard" data-action="add-screen">+</button></div>
+      ${this._displayEditorContext()}
+      <div class="screen-workspace"><aside class="screen-list"><div class="screen-list-heading"><label>2 · CHOOSE A SCREEN</label><button class="add-screen-tab" title="Add dashboard" data-action="add-screen">+</button></div>
         ${profile.screens.map((screen) => `<button class="screen-tab ${screen.screen_id === activeScreen.screen_id ? "selected" : ""}" data-action="select-screen" data-screen-id="${escapeHtml(screen.screen_id)}">${escapeHtml(screen.title)}</button>`).join("")}
       </aside><div class="screens">${this._screenEditor(activeScreen, profile.screens.indexOf(activeScreen))}</div></div>
       ${this._renderEditorDialog()}`;
@@ -210,29 +327,356 @@ class BiofectsButlerPanel extends HTMLElement {
   }
 
   _screenEditor(screen, screenIndex) {
-    if (screen.screen_id === "home") this._ensureHomeSidebarBlueprint(screen);
+    if (screen.screen_id === "home" && screen.composition === "radial_command_overview") this._ensureHomeSidebarBlueprint(screen);
     const missingSlots = COMPOSITIONS[screen.composition].filter((slot) => !screen.sections.some((section) => section.slot === slot));
     const activeSection = screen.sections.find((section) => section.slot === this._activeSectionSlot) || screen.sections[0];
     const activeSectionIndex = activeSection ? screen.sections.indexOf(activeSection) : -1;
     this._activeSectionSlot = activeSection?.slot || null;
     return `
       <article class="screen-card">
+        <div class="editor-save-bar"><span>Editing <strong>${escapeHtml(screen.title)}</strong><small>Changes stay in this editor until you save.</small></span><button class="primary" data-action="save" ${this._saving ? "disabled" : ""}>${this._saving ? "Saving…" : "Save changes"}</button></div>
         <div class="screen-head canvas-toolbar">
-          <div class="field grow"><label>DASHBOARD NAME</label>${screen.screen_id === "home" ? `<div class="fixed-value">Home</div>` : `<input data-screen="${screenIndex}" data-field="title" value="${escapeHtml(screen.title)}">`}</div>
+          <div class="field grow"><label>DASHBOARD NAME</label><input data-screen="${screenIndex}" data-field="title" value="${escapeHtml(screen.title)}"></div>
           <div class="field screen-font-scale"><label>TEXT SCALE %</label><input data-screen="${screenIndex}" data-field="font_scale" type="number" min="75" max="175" step="5" value="${Number(screen.font_scale || 100)}"></div>
           ${screen.screen_id === "home" ? "" : `<button class="icon" title="Move screen up" data-action="move-screen" data-index="${screenIndex}" data-direction="-1">↑</button><button class="icon" title="Move screen down" data-action="move-screen" data-index="${screenIndex}" data-direction="1">↓</button>`}
           <button class="danger" title="Delete dashboard" data-action="remove-screen" data-index="${screenIndex}" ${screen.screen_id === "home" ? "disabled" : ""}><ha-icon icon="mdi:delete-outline"></ha-icon>Delete Dashboard</button>
         </div>
-        <div class="home-mode-note"><ha-icon icon="${screen.screen_id === "home" ? "mdi:home-edit" : "mdi:tune-variant"}"></ha-icon><span><strong>${screen.screen_id === "home" ? "Concept Home panels" : "Native Butler controls"}</strong><small>${screen.screen_id === "home" ? "Add, remove, resize, and configure panels while retaining Butler's native Home design." : "Entity controls expand into a detailed Butler control panel when tapped."}</small></span></div>
-        ${screen.screen_id === "home" ? "" : `<label class="layout-label">DASHBOARD TEMPLATE</label><div class="layout-choices">${Object.entries(LAYOUTS).map(([composition, layout]) => this._layoutChoice(composition, layout, screen.composition, screenIndex)).join("")}</div>`}
+        <div class="home-mode-note"><ha-icon icon="${screen.screen_id === "home" ? "mdi:home-edit" : "mdi:tune-variant"}"></ha-icon><span><strong>${screen.screen_id === "home" ? (screen.composition === "radial_command_overview" ? "Command Center" : "Flexible Home Dashboard") : "Native Butler controls"}</strong><small>${screen.screen_id !== "home" ? "Entity controls expand into a detailed Butler control panel when tapped." : screen.composition === "radial_command_overview" ? "Keep the assistant-centered layout or choose a flexible grid. Your other screens stay available." : "Arrange Home panels as cards; Butler navigation stays in the bottom bar."}</small></span></div>
+        <details class="page-layout-options"><summary>Change page layout or text arrangement</summary>
+        ${screen.screen_id === "home" ? `<label class="layout-label">HOME LAYOUT</label><div class="layout-choices">${["radial_command_overview", "freeform_grid"].map((composition) => [composition, LAYOUTS[composition]]).map(([composition, layout]) => this._layoutChoice(composition, layout, screen.composition, screenIndex)).join("")}</div>` : `<label class="layout-label">DASHBOARD TEMPLATE</label><div class="layout-choices">${Object.entries(LAYOUTS).map(([composition, layout]) => this._layoutChoice(composition, layout, screen.composition, screenIndex)).join("")}</div>`}
+        ${screen.composition === "radial_command_overview" ? `<div class="field"><label>COMMAND CENTER ARRANGEMENT</label><select data-screen="${screenIndex}" data-field="command_layout">${Object.entries({console: "Console — compact assistant, wide home status", orbital: "Original — centered assistant with side menus", observatory: "Observatory — large projection, stacked instruments", wings: "Wings — status rail and information flank the assistant"}).map(([value, title]) => `<option value="${value}" ${(screen.command_layout && screen.command_layout !== "theme_default" ? screen.command_layout : "orbital") === value ? "selected" : ""}>${title}</option>`).join("")}</select><small>Home Assistant controls this arrangement for every display theme. Phone layouts stack to fit.</small></div>` : ""}
+        </details>
+        ${screen.composition !== "freeform_grid" ? this._simplePanelControls(screen, screenIndex, activeSection) : ""}
+        ${this._layoutPreview(screen, screenIndex, activeSection)}
         <div class="panel-picker"><div class="panel-picker-heading"><strong>PANELS</strong><small>Select one to edit</small></div><div class="panel-picker-list">${screen.sections.map((section) => `<button class="panel-picker-item ${section === activeSection ? "selected" : ""}" data-action="select-panel" data-panel-slot="${escapeHtml(section.slot)}"><ha-icon icon="mdi:view-grid-outline"></ha-icon><span>${escapeHtml(section.title || this._slotLabel(section.slot, screen))}</span><small>${escapeHtml(label(section.type))}</small></button>`).join("")}</div></div>
-        <details class="add-panel"><summary>Add panel</summary><div class="panel-toolbar">${missingSlots.map((slot) => `<button data-action="add-section" data-screen="${screenIndex}" data-slot="${slot}"><ha-icon icon="mdi:plus"></ha-icon>${escapeHtml(this._slotLabel(slot, screen))}</button>`).join("") || `<small>All panel positions are in use.</small>`}</div></details>
-        <div class="focused-panel-editor">${activeSection ? this._sectionEditor(activeSection, screen, screenIndex, activeSectionIndex) : `<div class="empty-panels">Add a panel to build this dashboard.</div>`}</div>
+        <details class="add-panel"><summary>Add panel</summary><div class="panel-toolbar">${screen.composition === "freeform_grid"
+          ? SECTION_TYPES.map((type) => `<button data-action="add-freeform-section" data-screen="${screenIndex}" data-panel-type="${type}" ${screen.sections.length >= 20 ? "disabled" : ""}><ha-icon icon="mdi:plus"></ha-icon>${label(type)}</button>`).join("") || `<small>Panel limit reached.</small>`
+          : missingSlots.map((slot) => `<button data-action="add-section" data-screen="${screenIndex}" data-slot="${slot}"><ha-icon icon="mdi:plus"></ha-icon>${escapeHtml(this._slotLabel(slot, screen))}</button>`).join("") || `<small>All panel positions are in use.</small>`}</div></details>
+        ${screen.composition === "freeform_grid" ? `<details class="visual-advanced" ${this._panelAdvancedOpen ? "open" : ""}><summary>Advanced panel settings</summary>` : ""}<div class="focused-panel-editor">${activeSection ? this._sectionEditor(activeSection, screen, screenIndex, activeSectionIndex) : `<div class="empty-panels">Add a panel to build this dashboard.</div>`}</div>${screen.composition === "freeform_grid" ? "</details>" : ""}
       </article>`;
   }
 
+  _simplePanelControls(screen, screenIndex, activeSection) {
+    if (!activeSection) return "";
+    const index = screen.sections.indexOf(activeSection);
+    const grid = screen.composition === "freeform_grid";
+    const columns = Number(screen.grid_columns || 4);
+    const position = grid ? dashboardGridPlacements(screen, columns)[index] : null;
+    const choices = {top_left:"Upper left", top_right:"Upper right", bottom:"Below all panels"};
+    const attrs = `data-screen="${screenIndex}" data-section="${index}"`;
+    return `<section class="simple-panel-controls" aria-label="Arrange selected panel"><label>Selected panel<select data-quick-panel data-screen="${screenIndex}">${screen.sections.map((section, i) => `<option value="${i}" ${i === index ? "selected" : ""}>${escapeHtml(section.title || this._slotLabel(section.slot, screen))}</option>`).join("")}</select></label>${grid ? `<label>Place panel<select data-quick-position ${attrs}><option value="">Choose a position…</option>${Object.entries(choices).map(([value, title]) => `<option value="${value}">${escapeHtml(title)}</option>`).join("")}</select></label>` : ""}${grid ? `<div class="panel-step-buttons" role="group" aria-label="Move selected panel">${[["left","←","Move panel left"],["up","↑","Move panel up"],["down","↓","Move panel down"],["right","→","Move panel right"]].map(([direction, icon, title]) => `<button data-action="nudge-panel" ${attrs} data-direction="${direction}" aria-label="${title}" ${(direction === "left" && position.column === 0) || (direction === "right" && position.column + position.width >= columns) || (direction === "up" && position.row === 0) || (direction === "down" && position.row >= 39) ? "disabled" : ""}>${icon}</button>`).join("")}</div><label>Width<select data-quick-size="column_span" ${attrs}>${Array.from({length:columns},(_,i)=>i+1).map(n=>`<option value="${n}" ${n === Number(activeSection.column_span || 2) ? "selected" : ""}>${n} of ${columns} columns</option>`).join("")}</select></label><label>Height<select data-quick-size="row_span" ${attrs}>${Array.from({length:8},(_,i)=>i+1).map(n=>`<option value="${n}" ${n === Number(activeSection.row_span || 1) ? "selected" : ""}>${n} ${n === 1 ? "row" : "rows"}</option>`).join("")}</select></label><button data-action="undo-grid" data-screen="${screenIndex}" ${this._gridHistory?.get(`${this._draft.profile_id}:${screen.screen_id}`)?.length ? "" : "disabled"}>Undo layout</button>` : ""}<p>${grid ? "If a position is occupied, panels move down to avoid overlap. Undo restores the previous layout. Phone previews use panel reading order." : "This template fixes panel positions. Select a panel to edit its contents. Open “Change page layout” and choose Visual designer for free placement."}</p></section>`;
+  }
+
+  _adjustPanel(screenIndex, sectionIndex, change, value) {
+    const screen = this._draft.screens[screenIndex], section = screen?.sections[sectionIndex];
+    if (!section) return;
+    if (screen.composition !== "freeform_grid") return;
+    const columns = Number(screen.grid_columns || 4);
+    const placements = dashboardGridPlacements(screen, columns), p = placements[sectionIndex];
+    this._rememberGridLayout(screen);
+    let column = p.column + 1, row = p.row + 1;
+    if (change === "position") {
+      if (value === "top_left") { column = 1; row = 1; }
+      else if (value === "top_right") { column = columns - p.width + 1; row = 1; }
+      else if (value === "bottom") { column = 1; row = Math.max(0,...placements.filter((_,i)=>i!==sectionIndex).map(p=>p.row+p.height)) + 1; }
+    } else if (change === "nudge") {
+      column += value === "left" ? -1 : value === "right" ? 1 : 0;
+      row += value === "up" ? -1 : value === "down" ? 1 : 0;
+    } else if (["column_span", "row_span"].includes(change)) {
+      section[change] = Math.max(1,Math.min(change === "column_span" ? columns : 8,Number(value)));
+      column = Math.min(column, columns - Number(section.column_span || 2) + 1);
+    }
+    section.grid_column = Math.max(1, Math.min(columns - Number(section.column_span || 2) + 1, column));
+    section.grid_row = Math.max(1, Math.min(40,row));
+    this._gridViewport = "desktop";
+    this._message = "Layout updated in the editor. Save changes to apply it to your displays.";
+  }
+
+  _gridDesigner(screen, screenIndex, activeSection) {
+    const configured = Number(screen.grid_columns || 4);
+    const viewport = this._gridViewport || "desktop";
+    const columns = viewport === "phone" ? 1 : viewport === "tablet" ? Math.min(configured, 6) : configured;
+    const placements = dashboardGridPlacements(screen, columns);
+    const rows = Math.max(4, ...placements.map((p) => p.row + p.height + 1));
+    const editable = columns === configured;
+    const rowPixels = Math.round(Number(screen.grid_row_height || 240) / 2);
+    const numeric = (field, title, min, max, fallback) => `<label>${title}<input type="number" data-screen="${screenIndex}" data-field="${field}" min="${min}" max="${max}" value="${Number(screen[field] ?? fallback)}"></label>`;
+    const cells = Array.from({length: rows * columns}, (_, index) => {
+      const column = index % columns + 1, row = Math.floor(index / columns) + 1;
+      return `<button class="canvas-cell" style="grid-column:${column};grid-row:${row}" data-action="place-grid-panel" data-screen="${screenIndex}" data-grid-column="${column}" data-grid-row="${row}" aria-label="Place selected panel at column ${column}, row ${row}" ${!editable || row > 40 ? "disabled" : ""}>${column}·${row}</button>`;
+    }).join("");
+    const panels = screen.sections.map((section, index) => {
+      const p = placements[index];
+      return `<article class="canvas-panel ${section === activeSection ? "selected" : ""}" style="grid-column:${p.column + 1}/span ${p.width};grid-row:${p.row + 1}/span ${p.height}" data-action="select-panel" data-panel-slot="${escapeHtml(section.slot)}" data-drop-screen="${screenIndex}" data-drop-section="${index}" ${editable ? `draggable="true" data-panel-drag data-panel-id="${escapeHtml(section.section_id)}" data-panel-screen="${screenIndex}" data-drop-panel="${escapeHtml(section.section_id)}"` : ""}><header class="visual-panel-header"><span>${escapeHtml(section.title || label(section.type))}</span><small>${p.width} × ${p.height}</small><button data-action="duplicate-canvas-panel" data-screen="${screenIndex}" data-section="${index}" title="Duplicate panel">⧉</button></header><div class="visual-panel-cards">${this._designElementPreview(section)}${(section.bindings || []).map((binding, bindingIndex) => this._visualBinding(binding, section, screenIndex, index, bindingIndex)).join("") || `<button class="visual-add-card" data-action="open-entity-picker" data-screen="${screenIndex}" data-section="${index}">+ Add or drop entities</button>`}</div>${editable ? `<span class="canvas-resize" data-resize-screen="${screenIndex}" data-resize-index="${index}" aria-hidden="true" title="Drag to resize">↘</span>` : ""}</article>`;
+    }).join("");
+    const canvas = `<section class="grid-designer"><div class="canvas-heading"><div><strong>ARRANGE YOUR PANELS</strong><p>Select a panel, then choose a position or use the arrow buttons. Dragging is optional.</p></div><div class="viewport-choices">${["desktop", "tablet", "phone"].map((value) => `<button data-action="grid-viewport" data-viewport="${value}" class="${value === viewport ? "selected" : ""}" aria-pressed="${value === viewport}">${label(value)}</button>`).join("")}</div></div><div class="visual-layout-tools"><button data-action="sections-flow" data-screen="${screenIndex}">Sections · automatic flow</button><details class="canvas-options" ${this._canvasOptionsOpen ? "open" : ""}><summary>Grid options & starting layouts</summary><div class="canvas-settings"><label><input type="checkbox" data-show-page-header data-screen="${screenIndex}" ${screen.show_header !== false ? "checked" : ""}> Show built-in page header</label>${numeric("grid_columns", "GRID COLUMNS", 1, 12, 4)}${numeric("grid_row_height", "ROW HEIGHT (dp)", 80, 400, 240)}${numeric("grid_gap", "PANEL GAP (dp)", 0, 32, 10)}<button data-action="auto-grid" data-screen="${screenIndex}">Auto arrange</button><button data-action="undo-grid" data-screen="${screenIndex}" ${this._gridHistory?.get(`${this._draft.profile_id}:${screen.screen_id}`)?.length ? "" : "disabled"}>Undo layout</button></div><div class="canvas-presets"><span>START WITH AN ARRANGEMENT</span>${[["whole_home", "Whole-home command", "House status, assistant, daily information and quick controls"], ["hero", "Feature + sidebar", "A large main panel beside stacked supporting panels"], ["mosaic", "Mosaic", "Mixed sizes for rooms, weather and media"], ["wall", "Monitor wall", "Equal panels for cameras and status"], ["briefing", "Daily briefing", "A wide lead panel above a row of smaller panels"]].map(([id, title, description]) => `<button title="${description}" data-action="grid-preset" data-screen="${screenIndex}" data-preset="${id}"><span class="preset-sketch preset-${id}"><i></i><i></i><i></i><i></i></span><strong>${title}</strong><small>${description}</small></button>`).join("")}</div><p class="canvas-hint">${editable ? "Positions are preferred starting cells. If panels collide, the later panel moves down to free space. Automatic panels fill remaining gaps." : "Responsive preview: panels reflow in reading order. Switch to Desktop to edit their positions."} Whole-home command groups panels by purpose; other feature layouts use the selected panel. Your entities and actions stay attached.</p></details></div><div class="canvas-scroll viewport-${viewport}"><div class="advanced-canvas" style="grid-template-columns:repeat(${columns},minmax(0,1fr));grid-template-rows:repeat(${rows},${rowPixels}px);gap:${Number(screen.grid_gap ?? 10) / 3}px">${cells}${panels}</div></div></section>`;
+    return `${this._simplePanelControls(screen, screenIndex, activeSection)}<div class="visual-workspace">${this._visualLibrary(screenIndex)}<div class="visual-stage">${canvas}</div>${this._visualInspector(screenIndex)}</div>`;
+  }
+
+  _visualBinding(binding, section, screenIndex, sectionIndex, bindingIndex) {
+    const state = this._hass?.states?.[binding.target_id];
+    const action = (section.actions || []).find((action) => action.gesture === "tap" && (action.source_id || action.target_id) === binding.target_id);
+    const selected = this._canvasCard?.sectionId === section.section_id && this._canvasCard?.entityId === binding.target_id;
+    const location = `data-screen="${screenIndex}" data-section="${sectionIndex}" data-binding="${bindingIndex}"`;
+    return `<button class="visual-entity-card ${binding.display_mode === "tile" ? "is-tile" : "is-row"} ${selected ? "selected" : ""}" style="grid-column:span ${binding.display_mode === "tile" ? Number(binding.card_width || 2) : 4};min-height:${Number(binding.card_height || 1) * 52}px" draggable="true" data-binding-card ${location} data-action="select-canvas-card"><ha-icon icon="${escapeHtml(binding.icon || state?.attributes?.icon || this._defaultIcon(binding.target_id))}"></ha-icon><span><strong>${escapeHtml(binding.name || state?.attributes?.friendly_name || binding.target_id)}</strong><small>${escapeHtml(state?.state || "Unavailable")}${state?.attributes?.unit_of_measurement ? ` ${escapeHtml(state.attributes.unit_of_measurement)}` : ""}</small></span><em>${action?.type === "toggle" ? "Toggle" : action?.type === "activate" ? "Run" : action && action.type !== "more_info" ? "Custom" : "Controls"}</em></button>`;
+  }
+
+  _visualLibrary(screenIndex) {
+    return `<aside class="visual-library"><h2>Add to your design</h2><p>Drag a panel onto the grid. Drop entities into panels or onto empty space to make a new panel.</p><div class="visual-panel-library">${[["entity_controls","Entity section"],["heading","Heading"],["text","Text / greeting"],["image","Image / logo"],["assistant","Theme visual"],["weather","Weather"],["cameras","Cameras"],["media","Media"],["events","Agenda"]].map(([type,title]) => `<button draggable="true" data-library-panel="${type}" data-action="add-library-panel" data-screen="${screenIndex}" data-panel-type="${type}">+ ${title}</button>`).join("")}</div><label>Find an entity<input data-library-search data-library-screen="${screenIndex}" value="${escapeHtml(this._libraryQuery || "")}" placeholder="Name, entity ID or domain" autocomplete="off"></label><div class="visual-library-entities">${this._visualLibraryEntities(screenIndex)}</div></aside>`;
+  }
+
+  _visualLibraryEntities(screenIndex) {
+    const query = (this._libraryQuery || "").toLowerCase().trim();
+    const entities = Object.values(this._hass?.states || {}).filter((state) => `${state.entity_id} ${state.attributes?.friendly_name || ""}`.toLowerCase().includes(query)).sort((a,b) => (a.attributes?.friendly_name || a.entity_id).localeCompare(b.attributes?.friendly_name || b.entity_id));
+    return `<small>${entities.length} matching entities${entities.length > 150 ? " · first 150 shown; narrow your search" : ""}</small>${entities.slice(0,150).map((state) => `<button draggable="true" data-library-entity="${escapeHtml(state.entity_id)}" data-action="add-library-entity" data-screen="${screenIndex}"><ha-icon icon="${escapeHtml(state.attributes?.icon || this._defaultIcon(state.entity_id))}"></ha-icon><span><strong>${escapeHtml(state.attributes?.friendly_name || state.entity_id)}</strong><small>${escapeHtml(state.entity_id)}</small></span><span aria-hidden="true">+</span></button>`).join("") || "<p>No matching entities.</p>"}`;
+  }
+
+  _designElementPreview(section) {
+    if (!["heading","text","image"].includes(section.type)) return "";
+    const binding = section.bindings?.[0], state = this._hass?.states?.[binding?.target_id];
+    const key = binding?.display_attributes?.[0];
+    const value = state && !["unknown","unavailable"].includes(state.state) ? (key && key !== "state" ? state.attributes?.[key] : state.state) : null;
+    if (section.type === "image") {
+      const source = state?.attributes?.entity_picture || value || section.default_image;
+      if (source && /^(https?:\/\/|\/(?!\/))/.test(source)) return `<div class="visual-design-preview"><img src="${escapeHtml(source)}" alt="${escapeHtml(section.title || "Center artwork")}" loading="lazy" referrerpolicy="no-referrer"></div>`;
+      return '<div class="visual-design-preview">Choose an HA image entity or /local/ image</div>';
+    }
+    return `<div class="visual-design-preview ${section.type === "heading" ? "design-heading" : ""}">${escapeHtml(value ?? section.secondary_title ?? section.title ?? "Your text")}</div>`;
+  }
+
+  _visualPanelInspector(screenIndex) {
+    const screen = this._draft.screens[screenIndex];
+    const index = screen.sections.findIndex((section) => section.slot === this._activeSectionSlot), section = screen.sections[index];
+    if (!section) return '<aside class="visual-inspector"><h2>Page elements</h2><p>Add a heading, text, image, weather panel or controls from the library. Theme visuals are optional.</p></aside>';
+    const location = `data-screen="${screenIndex}" data-section="${index}"`;
+    const decorative = ["heading","text","image"].includes(section.type);
+    return `<aside class="visual-inspector"><h2>Panel settings</h2><label>Title / label<input data-design-title ${location} maxlength="80" value="${escapeHtml(section.title || "")}"></label><label>Element type<select data-section-type ${location}>${SECTION_TYPES.map((type) => `<option value="${type}" ${section.type === type ? "selected" : ""}>${label(type)}</option>`).join("")}</select></label>${["heading","text"].includes(section.type) ? `<label>Text size %<input type="number" min="60" max="140" data-screen="${screenIndex}" data-section="${index}" data-field="content_scale" value="${Number(section.content_scale || 100)}"></label><label>Text fallback<textarea data-design-text ${location} maxlength="80">${escapeHtml(section.secondary_title || "")}</textarea></label><p>Use an input_text helper or template sensor as the first entity for a live title, greeting or message. It overrides the fallback when available.</p>` : ""}${section.type === "image" ? `<label>Image fallback<input data-design-image ${location} value="${escapeHtml(section.default_image || "")}" placeholder="/local/my-logo.png"></label><p>Bind an image entity, or a helper containing an image URL. The entity picture takes precedence; the fallback is used if unavailable.</p>` : ""}<button data-action="open-entity-picker" ${location}>${decorative ? "Choose Home Assistant source" : "Add entities"}</button><p>${decorative ? "The first entity supplies the content. Select its card to choose a state attribute in More card options." : "Select a card on the canvas to change its appearance or tap behavior."} Theme artwork, labels and weather can be replaced with separate movable elements.</p><button class="danger" data-action="remove-section" data-screen="${screenIndex}" data-index="${index}">Remove element</button></aside>`;
+  }
+
+  _visualInspector(screenIndex) {
+    const screen = this._draft.screens[screenIndex];
+    const sectionIndex = screen.sections.findIndex((section) => section.section_id === this._canvasCard?.sectionId);
+    const section = screen.sections[sectionIndex];
+    const bindingIndex = section?.bindings.findIndex((binding) => binding.target_id === this._canvasCard?.entityId) ?? -1;
+    const binding = section?.bindings[bindingIndex];
+    if (!binding) return this._visualPanelInspector(screenIndex);
+    const location = `data-screen="${screenIndex}" data-section="${sectionIndex}" data-binding="${bindingIndex}"`;
+    const action = (section.actions || []).find((action) => action.gesture === "tap" && (action.source_id || action.target_id) === binding.target_id);
+    const type = action?.type || "more_info";
+    const custom = !["more_info","toggle","activate"].includes(type);
+    return `<aside class="visual-inspector"><h2>Card settings</h2><small>${escapeHtml(binding.target_id)}</small><label>Name<input data-binding-name ${location} maxlength="100" value="${escapeHtml(binding.name || "")}" placeholder="Entity name"></label><label>Appearance<select data-binding-display-mode ${location}><option value="row" ${binding.display_mode !== "tile" ? "selected" : ""}>Information row</option><option value="tile" ${binding.display_mode === "tile" ? "selected" : ""}>Tile / button</option></select></label><label>On tap<select data-binding-tap-mode ${location}>${custom ? '<option value="custom" selected disabled>Custom action (advanced)</option>' : ""}<option value="more_info" ${type === "more_info" ? "selected" : ""}>Open controls</option><option value="toggle" ${type === "toggle" ? "selected" : ""}>Toggle entity</option><option value="activate" ${type === "activate" ? "selected" : ""} ${/^(scene|script|automation)\./.test(binding.target_id) ? "" : "disabled"}>Run scene / script / automation</option></select></label><p>Changing a card here edits the design. It does not operate the entity.</p><label>Tile width<select data-binding-card-width ${location}>${[1,2,3,4].map((n) => `<option value="${n}" ${Number(binding.card_width || 2) === n ? "selected" : ""}>${n} columns</option>`).join("")}</select></label><label>Tile height<select data-binding-card-height ${location}>${[1,2].map((n) => `<option value="${n}" ${Number(binding.card_height || 1) === n ? "selected" : ""}>${n} rows</option>`).join("")}</select></label><div class="card-order-buttons"><button data-action="reorder-canvas-card" ${location} data-direction="-1" ${bindingIndex === 0 ? "disabled" : ""}>Move card up</button><button data-action="reorder-canvas-card" ${location} data-direction="1" ${bindingIndex === section.bindings.length - 1 ? "disabled" : ""}>Move card down</button></div><label>Move to panel<select data-move-canvas-card ${location}>${screen.sections.map((candidate,i) => `<option value="${i}" ${i === sectionIndex ? "selected" : ""}>${escapeHtml(candidate.title || label(candidate.type))}</option>`).join("")}</select></label><button data-action="edit-binding" ${location}>More card options</button><button class="danger" data-action="remove-binding" ${location}>Remove card</button></aside>`;
+  }
+
+  _addCanvasEntity(screenIndex, sectionIndex, entityId, cell = null) {
+    const screen = this._draft.screens[screenIndex];
+    if (!screen || !this._hass?.states?.[entityId]) return;
+    let section = screen.sections[sectionIndex];
+    if (!section) {
+      if (screen.sections.length >= 20) { this._message = "This screen has 20 panels. Add the entity to an existing panel."; return; }
+      this._addFreeformSection(screenIndex, "entity_controls");
+      section = screen.sections[screen.sections.length - 1];
+      if (cell) Object.assign(section, {grid_column:cell.column, grid_row:cell.row});
+      section.title = this._hass.states[entityId].attributes?.friendly_name || "Entities";
+    }
+    section.bindings ||= [];
+    if (section.bindings.some((binding) => binding.target_id === entityId)) { this._message = "That entity is already in this panel."; return; }
+    if (section.bindings.length >= 100 || (section.actions || []).length >= 20) { this._message = "This panel is full. Add another panel for more cards."; return; }
+    section.bindings.push({kind:"entity", target_id:entityId, display_mode:"tile", card_width:2});
+    section.actions ||= [];
+    section.actions.push({gesture:"tap",type:"more_info",target_id:entityId});
+    this._activeSectionSlot = section.slot;
+    this._canvasCard = {sectionId:section.section_id,entityId};
+    this._message = "";
+  }
+
+  _moveCanvasBinding(source, destinationScreen, destinationSection, before = null) {
+    const from = this._draft.screens[source.screen]?.sections[source.section];
+    const to = this._draft.screens[destinationScreen]?.sections[destinationSection];
+    const binding = from?.bindings?.[source.binding];
+    if (!binding || !to) return false;
+    const linked = (from.actions || []).filter((action) => action.source_id === binding.target_id || (!action.source_id && action.target_id === binding.target_id && ["more_info","toggle","activate"].includes(action.type)));
+    if (from !== to && (to.bindings.some((candidate) => candidate.target_id === binding.target_id) || to.bindings.length >= 100 || (to.actions || []).length + linked.length > 20)) {
+      this._message = "Move could not fit without duplicating a card or losing actions. Choose another panel.";return false;
+    }
+    from.bindings.splice(source.binding,1);
+    let index = before === null ? to.bindings.length : before;
+    if (from === to && before !== null && source.binding < before) index--;
+    to.bindings.splice(Math.max(0,index),0,binding);
+    if (from !== to) { from.actions = (from.actions || []).filter((action) => !linked.includes(action)); to.actions = [...(to.actions || []),...linked]; }
+    this._canvasCard = {sectionId:to.section_id,entityId:binding.target_id};this._activeSectionSlot = to.slot;this._message = "";return true;
+  }
+
+  _rememberGridLayout(screen) {
+    this._gridHistory ||= new Map();
+    const key = `${this._draft.profile_id}:${screen.screen_id}`;
+    const fields = ["grid_columns", "grid_row_height", "grid_gap"];
+    const panelFields = ["column_span", "row_span", "grid_column", "grid_row"];
+    const snapshot = {settings:Object.fromEntries(fields.map((field) => [field, screen[field]])), panels:screen.sections.map((section) => ({id:section.section_id, settings:Object.fromEntries(panelFields.map((field) => [field, section[field]]))}))};
+    const history = this._gridHistory.get(key) || [];
+    history.push(snapshot);
+    this._gridHistory.set(key, history.slice(-20));
+  }
+
+  _undoGridLayout(screen) {
+    const snapshot = this._gridHistory?.get(`${this._draft.profile_id}:${screen.screen_id}`)?.pop();
+    if (!snapshot) return;
+    const restore = (target, settings) => Object.entries(settings).forEach(([field, value]) => {
+      if (value === undefined) delete target[field]; else target[field] = value;
+    });
+    restore(screen, snapshot.settings);
+    const order = new Map(snapshot.panels.map((saved, index) => [saved.id, index]));
+    screen.sections.sort((a, b) => (order.get(a.section_id) ?? order.size) - (order.get(b.section_id) ?? order.size));
+    snapshot.panels.forEach((saved) => {
+      const section = screen.sections.find((section) => section.section_id === saved.id);
+      if (section) restore(section, saved.settings);
+    });
+  }
+
+  _applyGridPreset(screenIndex, preset) {
+    const screen = this._draft.screens[screenIndex];
+    if (!screen || screen.composition !== "freeform_grid") return;
+    this._rememberGridLayout(screen);
+    screen.grid_columns = 12;
+    screen.grid_row_height = 120;
+    screen.grid_gap = preset === "wall" ? 6 : 12;
+    if (preset === "whole_home") {
+      const roles = [["status_overview", "security"], ["assistant"], ["weather"], ["media"], ["events"], ["quick_commands", "entity_controls", "climate"]];
+      const used = new Set();
+      const matched = roles.map((types) => {
+        const section = screen.sections.find((section) => types.includes(section.type) && !used.has(section));
+        if (section) used.add(section);
+        return section;
+      });
+      const remaining = screen.sections.filter((section) => !used.has(section));
+      const slots = matched.map((section) => section || remaining.shift());
+      const arranged = [...slots.filter(Boolean), ...remaining];
+      const geometry = [[1,1,12,2], [1,3,5,4], [6,3,3,2], [6,5,3,2], [9,3,4,4], [1,7,12,2]];
+      slots.forEach((section, index) => {
+        if (!section) return;
+        const [column,row,width,height] = geometry[index];
+        Object.assign(section, {grid_column:column, grid_row:row, column_span:width, row_span:height});
+      });
+      remaining.forEach((section, index) => Object.assign(section, {grid_column:1 + index % 3 * 4, grid_row:9 + Math.floor(index / 3) * 2, column_span:4, row_span:2}));
+      if (arranged.length < 3) arranged.forEach((section, index) => Object.assign(section, {grid_column:1, grid_row:1 + index * 3, column_span:12, row_span:3}));
+      screen.sections = arranged;
+      return;
+    }
+    const active = screen.sections.find((section) => section.slot === this._activeSectionSlot);
+    const arranged = active && preset !== "wall" ? [active, ...screen.sections.filter((section) => section !== active)] : screen.sections;
+    arranged.forEach((section, index) => {
+      let column, row, width, height;
+      if (preset === "hero") {
+        if (index === 0) [column, row, width, height] = [1, 1, 8, 4];
+        else if (index < 3) [column, row, width, height] = [9, 1 + (index - 1) * 2, 4, 2];
+        else [column, row, width, height] = [1 + ((index - 3) % 3) * 4, 5 + Math.floor((index - 3) / 3) * 2, 4, 2];
+      } else if (preset === "mosaic") {
+        const block = Math.floor(index / 4) * 4;
+        [column, row, width, height] = [[1,1,6,4],[7,1,6,2],[7,3,3,2],[10,3,3,2]][index % 4];
+        row += block;
+      } else if (preset === "briefing") {
+        [column, row, width, height] = index === 0 ? [1,1,12,2] : [1 + ((index - 1) % 3) * 4, 3 + Math.floor((index - 1) / 3) * 2, 4,2];
+      } else {
+        [column, row, width, height] = [1 + (index % 3) * 4, 1 + Math.floor(index / 3) * 2, 4,2];
+      }
+      Object.assign(section, {grid_column:column, grid_row:row, column_span:width, row_span:height});
+    });
+  }
+
   _layoutChoice(composition, layout, selected, screenIndex) {
-    return `<button class="layout-choice ${composition === selected ? "selected" : ""}" data-action="select-layout" data-screen="${screenIndex}" data-composition="${composition}"><span class="mini-layout ${composition}">${COMPOSITIONS[composition].map((slot) => `<i class="slot-${slot}"></i>`).join("")}</span><strong>${layout.name}</strong><small>${layout.description}</small></button>`;
+    const previewSlots = composition === "freeform_grid" ? ["panel-a", "panel-b", "panel-c", "panel-d", "panel-e"] : COMPOSITIONS[composition];
+    return `<button class="layout-choice ${composition === selected ? "selected" : ""}" data-action="select-layout" data-screen="${screenIndex}" data-composition="${composition}"><span class="mini-layout ${composition}">${previewSlots.map((slot) => `<i class="slot-${slot}"></i>`).join("")}</span><strong>${layout.name}</strong><small>${layout.description}</small></button>`;
+  }
+
+  _editorDisplay() {
+    const profileId = this._draft?.profile_id || this._selectedId;
+    const displays = (this._snapshot?.displays || []).filter((display) => this._snapshot?.assignments?.[display.display_id] === profileId);
+    return displays.find((display) => display.display_id === this._editorDisplayId)
+      || displays.find((display) => DISPLAY_THEMES.includes(this._snapshot?.display_themes?.[display.display_id]))
+      || displays[0];
+  }
+
+  _displayEditorContext() {
+    const displays = this._snapshot?.displays || [];
+    const display = this._editorDisplay();
+    const profileId = this._draft?.profile_id;
+    const shared = displays.filter((item) => this._snapshot?.assignments?.[item.display_id] === profileId);
+    return `<section class="display-editor-context"><label>1 · CHOOSE A DISPLAY<select data-editor-display><option value="">Profile preview</option>${displays.map((item) => `<option value="${escapeHtml(item.display_id)}" ${item.display_id === display?.display_id ? "selected" : ""}>${escapeHtml(item.name || item.model)}</option>`).join("")}</select></label><div><strong>${escapeHtml(display?.name || "Profile preview")}</strong><small>${display ? `Theme: ${escapeHtml(label(this._snapshot?.display_themes?.[display.display_id] || "butler_neon"))}. ` : ""}Choose a screen, then click a panel to edit its cards. Save Profile sends your changes to its assigned displays.</small>${shared.length > 1 ? `<small class="shared-profile-note">Shared profile: saving updates ${escapeHtml(shared.map((item) => item.name || item.model).join(", "))}.</small>` : ""}</div></section>`;
+  }
+
+  _editDisplay(displayId) {
+    const profileId = this._snapshot?.assignments?.[displayId];
+    if (!profileId) return;
+    if (profileId !== this._draft?.profile_id && this._loadedProfile && JSON.stringify(this._draft) !== JSON.stringify(this._loadedProfile)
+        && !window.confirm("Discard your unsaved profile changes and edit this display?")) {
+      this._render();
+      return;
+    }
+    this._editorDisplayId = displayId;
+    this._previewTheme = null;
+    this._activeWorkspace = "screens";
+    if (profileId !== this._draft?.profile_id) this._selectProfile(profileId);
+    else this._render();
+  }
+
+  _panelPreviewContent(section, screen, theme) {
+    if (screen.composition === "radial_command_overview" && section.slot === "reactor") {
+      if (theme.split("__")[0] === "pickle_rick") return `<img src="/biofects_butler_static/pickle-rick-picture.png" alt="Pickle Rick" style="height:80%;max-width:100%;object-fit:contain"><strong>Pickle Rick</strong><small>${PICKLE_RICK_BACKGROUNDS[theme.split("__")[1] || "plain"] || "Plain green"} · animated on display</small>`;
+      if (theme.split("__")[0] === "futurama_bender") return `<img src="/biofects_butler_static/bender-picture.png" alt="Bender" style="height:80%;max-width:100%;object-fit:contain"><strong>Bender</strong><small>${BENDER_BACKGROUNDS[theme.split("__")[1] || "plain"] || "Plain teal"} · animated on display</small>`;
+      if (theme === "hal_9000") return `<svg viewBox="0 0 160 220" style="height:80%;max-width:100%" role="img" aria-label="HAL 9000 red lens"><rect x="10" y="5" width="140" height="210" rx="3" fill="#93969b"/><rect x="19" y="14" width="122" height="138" fill="#101115"/><text x="80" y="34" fill="#f2f0e9" font-size="12" text-anchor="middle">HAL 9000</text><circle cx="80" cy="91" r="45" fill="#55585d"/><circle cx="80" cy="91" r="39" fill="#150504"/><circle cx="80" cy="91" r="29" fill="#850d06"/><circle cx="80" cy="91" r="17" fill="#f3310c"/><circle cx="80" cy="91" r="7" fill="#ffce58"/><path d="M26 167H134 M26 176H134 M26 185H134 M26 194H134 M26 203H134" stroke="#292c30" stroke-width="4"/></svg><small>HAL 9000 · voice-reactive lens on display</small>`;
+      if (SIMPSONS_CHARACTERS[theme.split("__")[0]]) return `<span class="preview-reactor-art" style="color:#ffd521" aria-hidden="true">◉</span><strong>${SIMPSONS_CHARACTERS[theme.split("__")[0]]}</strong><small>Blinking eyes · speaking animation on display</small>`;
+      if (theme !== "companion") return `<span class="preview-reactor-art" aria-hidden="true">◉</span><small>Voice assistant</small>`;
+      return `<svg class="preview-robot-art" viewBox="0 0 200 230" aria-label="Companion robot"><ellipse cx="100" cy="214" rx="48" ry="5" fill="none" stroke="#78edff"/><path d="M70 139 Q100 128 130 139 Q141 183 100 207 Q59 183 70 139" fill="#7f9fb3"/><rect x="76" y="146" width="48" height="31" rx="12" fill="#102332"/><circle cx="100" cy="161" r="11" fill="#78edff"/><rect x="49" y="151" width="17" height="39" rx="9" fill="#9ab8ca"/><rect x="134" y="151" width="17" height="39" rx="9" fill="#9ab8ca"/><rect x="30" y="25" width="140" height="113" rx="48" fill="#b5cbd7" stroke="#78edff"/><rect x="39" y="34" width="122" height="95" rx="40" fill="#071721"/><ellipse cx="75" cy="80" rx="12" ry="17" fill="#78edff"/><ellipse cx="125" cy="80" rx="12" ry="17" fill="#78edff"/><ellipse cx="77" cy="82" rx="6" ry="10" fill="#071721"/><ellipse cx="127" cy="82" rx="6" ry="10" fill="#071721"/><circle cx="72" cy="73" r="4" fill="white"/><circle cx="122" cy="73" r="4" fill="white"/><path d="M89 110 Q100 121 111 110" stroke="#78edff" fill="none" stroke-width="3"/><path d="M100 143 L84 136 L84 150 Z M100 143 L116 136 L116 150 Z" fill="#8e1931"/><rect x="97" y="139" width="6" height="8" rx="2" fill="#ac263e"/></svg>`;
+    }
+    const bindings = section.bindings || [];
+    const cards = bindings.slice(0, 5).map((binding) => {
+      const state = this._hass?.states?.[binding.target_id];
+      const title = binding.name || state?.attributes?.friendly_name || binding.target_id;
+      const details = (binding.display_attributes?.length ? binding.display_attributes.map((key) => `${label(key)}: ${state?.attributes?.[key] ?? "—"}`).join(" · ") : state?.state || "Unavailable");
+      return `<span class="preview-content-card"><ha-icon icon="${escapeHtml(binding.icon || state?.attributes?.icon || this._defaultIcon(binding.target_id || ""))}"></ha-icon><span><b>${escapeHtml(title)}</b><small>${escapeHtml(details)}</small></span></span>`;
+    }).join("");
+    if (cards) return `<span class="preview-content-list">${cards}</span>${bindings.length > 5 ? `<small>+${bindings.length - 5} more cards · scroll on device</small>` : ""}`;
+    const actions = (section.actions || []).filter((action) => action.type !== "navigate");
+    if (actions.length) return `<span class="preview-content-list">${actions.slice(0, 4).map((action) => `<span class="preview-command"><ha-icon icon="${escapeHtml(action.icon || "mdi:play-circle-outline")}"></ha-icon>${escapeHtml(action.name || action.service || action.target_id || "Action")}</span>`).join("")}</span>`;
+    if (section.type === "events") return `<small>Upcoming calendar events</small>`;
+    if (section.type === "media") return `<small>Media player information</small>`;
+    return `<small>Add cards to this panel</small>`;
+  }
+
+  _layoutPreviewTheme() {
+    const available = DISPLAY_THEMES;
+    if (available.includes(this._previewTheme)) return this._previewTheme;
+    const selectedTheme = this._snapshot?.display_themes?.[this._editorDisplay()?.display_id];
+    if (available.includes(selectedTheme)) return selectedTheme;
+    const profileId = this._draft?.profile_id || this._selectedId;
+    const assignedThemes = Object.entries(this._snapshot?.assignments || {})
+      .filter(([, assigned]) => assigned === profileId)
+      .map(([displayId]) => this._snapshot?.display_themes?.[displayId]);
+    return assignedThemes.find((theme) => available.includes(theme)) || "butler_neon";
+  }
+
+  _layoutPreview(screen, screenIndex, activeSection) {
+    if (screen.composition === "freeform_grid") return this._gridDesigner(screen, screenIndex, activeSection);
+    const previewTheme = this._layoutPreviewTheme();
+    const arrangement = screen.command_layout && screen.command_layout !== "theme_default" ? screen.command_layout : "orbital";
+    const mediaWeight = screen.sections.find((section) => section.slot === "media")?.panel_height === "full_height" ? 1 : .46;
+    const eventsWeight = screen.sections.find((section) => section.slot === "events")?.panel_height === "full_height" ? 1 : .46;
+    const previewStyle = arrangement === "companion" ? `style="grid-template-rows:${mediaWeight}fr ${eventsWeight}fr 32px"` : "";
+    const draggable = screen.screen_id !== "home" || screen.composition !== "radial_command_overview";
+    const previewPanels = screen.sections.filter((section) => !(arrangement === "companion" && ["left_menu", "right_menu"].includes(section.slot))).map((section, index) => {
+      const span = screen.composition === "freeform_grid"
+        ? `style="grid-column:span ${Number(section.column_span || 2)};grid-row:span ${Number(section.row_span || 1)}"`
+        : "";
+      const title = section.title || this._slotLabel(section.slot, screen);
+      const size = screen.composition === "freeform_grid"
+        ? `${Number(section.column_span || 2)} columns · ${Number(section.row_span || 1)} rows`
+        : `${section.bindings?.length || 0} cards`;
+      const dragAttributes = draggable
+        ? `draggable="true" data-panel-drag data-panel-id="${escapeHtml(section.section_id)}" data-panel-screen="${screenIndex}" data-drop-panel="${escapeHtml(section.section_id)}"`
+        : "";
+      return `<button class="preview-slot slot-${escapeHtml(section.slot)} ${section === activeSection ? "selected" : ""}" ${dragAttributes} data-action="select-panel" data-panel-slot="${escapeHtml(section.slot)}" ${span}><span class="preview-panel-title">${escapeHtml(title)}</span>${this._panelPreviewContent(section, screen, previewTheme)}</button>`;
+    }).join("");
+    const hint = draggable ? "Drag panels to swap positions. Select one below to edit it." : "Select a panel below to edit it, or arrange pages in the side panels.";
+    return `<section class="layout-preview"><div class="panel-picker-heading"><strong>3 · SELECT A PANEL TO EDIT</strong><small>${hint}</small></div><div class="preview-stage interactive-preview ${screen.composition} arrangement-${arrangement}" ${previewStyle}>${previewPanels || `<div class="empty-panels">Add a panel to see your layout</div>`}${arrangement === "companion" ? `<span class="preview-navigation">${(this._draft?.screens || []).map((page) => `<span>${escapeHtml(page.title)}</span>`).join("")}<span>System</span></span>` : ""}</div><small class="preview-caption">Layout and configured content preview. Android controls, scrolling and animation are rendered on the device.</small></section>`;
   }
 
   _slotLabel(slot, screen) {
@@ -245,6 +689,7 @@ class BiofectsButlerPanel extends HTMLElement {
       return this._homeSidebarEditor(section, screenIndex, sectionIndex);
     }
     if (section.type === "quick_commands") return this._quickCommandsEditor(section, screen, screenIndex, sectionIndex);
+    if (section.type === "form") return this._formEditor(section, screen, screenIndex, sectionIndex);
     if (section.type === "calendar_form") return this._calendarFormEditor(section, screen, screenIndex, sectionIndex);
     if (section.type === "recipe_browser") return this._recipeBrowserEditor(section, screen, screenIndex, sectionIndex);
     if (section.type === "weather") return this._weatherEditor(section, screen, screenIndex, sectionIndex);
@@ -328,6 +773,24 @@ class BiofectsButlerPanel extends HTMLElement {
         <div class="quick-command-list">${commands || `<div class="drop-empty">No command buttons configured.</div>`}</div>
         <button class="quick-command-add" data-action="add-quick-command" data-screen="${screenIndex}" data-section="${sectionIndex}"><ha-icon icon="mdi:plus"></ha-icon>Add Command Button</button>
       </details>
+    </div>`;
+  }
+
+  _formEditor(section, screen, screenIndex, sectionIndex) {
+    const location = `data-screen="${screenIndex}" data-section="${sectionIndex}"`;
+    const fields = (section.bindings || []).map((binding, bindingIndex) => this._bindingCard(binding, section, screenIndex, sectionIndex, bindingIndex)).join("");
+    const action = section.actions?.find((item) => item.role === "form_submit");
+    const runnable = Object.values(this._hass?.states || {})
+      .filter((state) => state.entity_id.startsWith("script.") || state.entity_id.startsWith("automation."))
+      .sort((left, right) => (left.attributes?.friendly_name || left.entity_id).localeCompare(right.attributes?.friendly_name || right.entity_id));
+    const scripts = runnable.filter((entity) => entity.entity_id.startsWith("script."));
+    const automations = runnable.filter((entity) => entity.entity_id.startsWith("automation."));
+    const runnableOptions = (entities) => entities.map((entity) => `<option value="${escapeHtml(entity.entity_id)}" ${entity.entity_id === action?.target_id ? "selected" : ""}>${escapeHtml(entity.attributes?.friendly_name || entity.entity_id)}</option>`).join("");
+    return `<div class="section-block slot-${section.slot}">
+      <div class="slot-heading"><label><span>FORM TITLE</span><input data-section-heading ${location} value="${escapeHtml(section.title || "Form")}" placeholder="Form"></label><label><span>PANEL TYPE</span><select data-section-type ${location}>${SECTION_TYPES.map((type) => `<option value="${type}" ${section.type === type ? "selected" : ""}>${label(type)}</option>`).join("")}</select></label>${this._panelControls(screenIndex, sectionIndex, section, screen.sections.length)}<button class="region-add" title="Add field" data-action="open-entity-picker" ${location}>+</button></div>
+      <div class="form-builder-help"><strong>1. Choose helper fields</strong><span>Add helpers such as input_text, input_select, input_boolean, or input_number. Save text, number, and date fields; selectors and switches update immediately.</span><a href="/config/helpers">Create or manage helpers in Home Assistant</a></div>
+      <div class="entity-canvas">${fields || `<button class="drop-empty" data-action="open-entity-picker" ${location}><ha-icon icon="mdi:plus-circle-outline"></ha-icon><span>Add a helper field</span></button>`}</div>
+      <div class="form-builder-action"><strong>2. Choose what happens on submit</strong><label><span>SUBMIT SCRIPT OR AUTOMATION</span><select data-form-target ${location}><option value="">Choose a script or automation</option>${scripts.length ? `<optgroup label="Scripts">${runnableOptions(scripts)}</optgroup>` : ""}${automations.length ? `<optgroup label="Automations">${runnableOptions(automations)}</optgroup>` : ""}</select></label>${runnable.length ? "" : `<p>No scripts or automations found. <a href="/config/script">Create one in Home Assistant</a>, then reopen this editor.</p>`}<label><span>BUTTON LABEL</span><input data-form-action-name ${location} value="${escapeHtml(action?.name || "Submit")}" maxlength="100" ${action ? "" : "disabled"}></label><p>Save text, number, and date fields first. The selected script or automation reads the helper values from Home Assistant.</p></div>
     </div>`;
   }
 
@@ -474,7 +937,7 @@ class BiofectsButlerPanel extends HTMLElement {
     return `<div class="entity-card" draggable="true" data-binding-card data-screen="${screenIndex}" data-section="${sectionIndex}" data-binding="${bindingIndex}">
       <div class="drag-handle" title="Drag to reorder or move">⠿</div>
       <ha-icon icon="${escapeHtml(icon)}"></ha-icon>
-      <div class="entity-copy"><strong>${escapeHtml(name)}</strong><small>${escapeHtml(stateText)}</small>${(binding.entity_ids || []).length > 1 ? `<small class="attribute-summary">${binding.entity_ids.length} ENTITIES</small>` : attributeSummary ? `<small class="attribute-summary">${escapeHtml(attributeSummary)}</small>` : ""}</div>
+      <div class="entity-copy"><strong>${escapeHtml(name)}</strong><small>${escapeHtml(stateText)}</small>${binding.group ? `<small class="attribute-summary">${escapeHtml(binding.group)} · ${binding.display_mode === "tile" ? "BUTTON" : "ROW"}</small>` : (binding.entity_ids || []).length > 1 ? `<small class="attribute-summary">${binding.entity_ids.length} ENTITIES</small>` : attributeSummary ? `<small class="attribute-summary">${escapeHtml(attributeSummary)}</small>` : ""}</div>
       <span class="tap-mode">${tapAction && tapAction.type !== "more_info" ? label(tapAction.type) : "TAP: CONTROLS"}</span>
       <button class="card-settings" title="Edit card" data-action="edit-binding" data-screen="${screenIndex}" data-section="${sectionIndex}" data-binding="${bindingIndex}"><ha-icon icon="mdi:cog-outline"></ha-icon></button>
     </div>`;
@@ -585,8 +1048,9 @@ class BiofectsButlerPanel extends HTMLElement {
     if (!displays.length) return `<div class="assignments"><h2>Displays</h2><p>No Butler displays registered yet.</p></div>`;
     return `<div class="assignments"><h2>Displays</h2>${displays.map((display) => {
       const assigned = this._snapshot.assignments?.[display.display_id] || "default";
-      const theme = this._snapshot.display_themes?.[display.display_id] || "butler_neon";
-      return `<div class="display"><span><strong>${escapeHtml(display.name)}</strong><small>${escapeHtml(display.model)} / ${escapeHtml(display.viewport_class)}</small><small>${escapeHtml(display.display_id)}</small></span><label>Dashboard<select data-display-profile="${escapeHtml(display.display_id)}">${profiles.map((profile) => `<option value="${escapeHtml(profile.profile_id)}" ${profile.profile_id === assigned ? "selected" : ""}>${escapeHtml(profile.name)}</option>`).join("")}</select></label><label>Theme<select data-display-theme="${escapeHtml(display.display_id)}"><option value="butler_neon" ${theme === "butler_neon" ? "selected" : ""}>Butler Neon</option><option value="holographic_interface" ${theme === "holographic_interface" ? "selected" : ""}>Holographic Interface</option>${display.edition === "paid" ? `<option value="biofects_hud" ${theme === "biofects_hud" ? "selected" : ""}>Biofects Aurora</option>` : ""}</select></label><button class="icon danger" title="Delete display" data-action="delete-display" data-display-id="${escapeHtml(display.display_id)}" data-display-name="${escapeHtml(display.name)}"><ha-icon icon="mdi:delete-outline"></ha-icon></button></div>`;
+      const savedTheme = this._snapshot.display_themes?.[display.display_id];
+      const theme = DISPLAY_THEMES.includes(savedTheme) ? savedTheme : "butler_neon";
+      return `<div class="display"><span><strong>${escapeHtml(display.name)}</strong><small>${escapeHtml(display.model)} / ${escapeHtml(display.viewport_class)}</small><small>${escapeHtml(display.display_id)}</small></span><label>Dashboard<select data-display-profile="${escapeHtml(display.display_id)}">${profiles.map((profile) => `<option value="${escapeHtml(profile.profile_id)}" ${profile.profile_id === assigned ? "selected" : ""}>${escapeHtml(profile.name)}</option>`).join("")}</select></label><label>Theme<select data-display-theme="${escapeHtml(display.display_id)}"><option value="butler_neon" ${theme === "butler_neon" ? "selected" : ""}>Butler Neon</option><option value="holographic_interface" ${theme === "holographic_interface" ? "selected" : ""}>Holographic Interface</option><option value="companion" ${theme === "companion" ? "selected" : ""}>Companion</option><option value="pickle_rick" ${theme.split("__")[0] === "pickle_rick" ? "selected" : ""}>Rick and Morty · Pickle Rick</option><option value="futurama_bender" ${theme.split("__")[0] === "futurama_bender" ? "selected" : ""}>Futurama · Bender</option><option value="hal_9000" ${theme === "hal_9000" ? "selected" : ""}>HAL 9000</option><option value="butler" ${theme === "butler" ? "selected" : ""}>Butler</option><option value="simpsons_homer" ${SIMPSONS_CHARACTERS[theme.split("__")[0]] ? "selected" : ""}>The Simpsons</option></select></label>${theme.split("__")[0] === "pickle_rick" ? `<label>Background<select data-display-pickle-background="${escapeHtml(display.display_id)}">${Object.entries(PICKLE_RICK_BACKGROUNDS).map(([key,name])=>`<option value="${key}" ${(theme.split("__")[1] || "plain") === key ? "selected" : ""}>${name}</option>`).join("")}</select></label>` : ""}${theme.split("__")[0] === "futurama_bender" ? `<label>Background<select data-display-bender-background="${escapeHtml(display.display_id)}">${Object.entries(BENDER_BACKGROUNDS).map(([key,name])=>`<option value="${key}" ${(theme.split("__")[1] || "plain") === key ? "selected" : ""}>${name}</option>`).join("")}</select></label>` : ""}${SIMPSONS_CHARACTERS[theme.split("__")[0]] ? `<label>Character<select data-display-character="${escapeHtml(display.display_id)}">${Object.entries(SIMPSONS_CHARACTERS).map(([key,name])=>`<option value="${key}" ${theme.split("__")[0] === key ? "selected" : ""}>${name}</option>`).join("")}</select></label><label>Background<select data-display-background="${escapeHtml(display.display_id)}">${Object.entries(SIMPSONS_BACKGROUNDS).map(([key,name])=>`<option value="${key}" ${(theme.split("__")[1] || "plain") === key ? "selected" : ""}>${name}</option>`).join("")}</select><small>Scenery requires Android beta.46 or later. Your saved layout stays the same.</small></label>` : ""}<button data-action="edit-display" data-display-id="${escapeHtml(display.display_id)}">Edit dashboard</button><button class="icon danger" title="Delete display" data-action="delete-display" data-display-id="${escapeHtml(display.display_id)}" data-display-name="${escapeHtml(display.name)}"><ha-icon icon="mdi:delete-outline"></ha-icon></button></div>`;
     }).join("")}</div>`;
   }
 
@@ -633,7 +1097,6 @@ class BiofectsButlerPanel extends HTMLElement {
         const existing = new Map((section.bindings || []).filter((binding) => binding.kind === "entity").map((binding) => [binding.target_id, binding]));
         section.bindings = [...nonEntities, ...values.map((target_id) => existing.get(target_id) || ({ kind: "entity", target_id }))];
         this._syncDefaultPopupActions(section, values);
-        this._render();
       });
       host.append(selector);
     });
@@ -696,6 +1159,18 @@ class BiofectsButlerPanel extends HTMLElement {
       await this._importLovelace();
       return;
     }
+    if (action === "load-lovelace-pages") {
+      await this._loadLovelacePages();
+      return;
+    }
+    if (action === "import-lovelace-page") {
+      await this._importLovelacePage();
+      return;
+    }
+    if (action === "edit-display") {
+      this._editDisplay(button.dataset.displayId);
+      return;
+    }
     if (action === "delete-display") {
       await this._deleteDisplay(button.dataset.displayId, button.dataset.displayName);
       return;
@@ -714,7 +1189,7 @@ class BiofectsButlerPanel extends HTMLElement {
       return;
     }
     if (!this._draft) return;
-    const structuralHomeActions = new Set(["select-layout", "remove-screen", "move-screen"]);
+    const structuralHomeActions = new Set(["remove-screen", "move-screen"]);
     const targetScreen = this._draft.screens[Number(button.dataset.screen ?? button.dataset.index)];
     if (structuralHomeActions.has(action) && targetScreen?.screen_id === "home") return;
     if (action === "add-screen") this._addScreen();
@@ -726,7 +1201,58 @@ class BiofectsButlerPanel extends HTMLElement {
       this._activeScreenId = button.dataset.screenId;
       this._activeSectionSlot = null;
     }
-    if (action === "select-panel") this._activeSectionSlot = button.dataset.panelSlot;
+    if (action === "select-panel") {
+      this._activeSectionSlot = button.dataset.panelSlot;
+      this._canvasCard = null;
+    }
+    if (action === "sections-flow") {
+      const screen = this._draft.screens[Number(button.dataset.screen)];
+      this._rememberGridLayout(screen);
+      screen.grid_columns = 12;screen.grid_row_height = 120;screen.grid_gap = 16;
+      screen.sections.forEach((section) => { delete section.grid_column;delete section.grid_row;section.column_span = 6;section.row_span = 3; });
+    }
+    if (action === "select-canvas-card") {
+      const section = this._draft.screens[Number(button.dataset.screen)].sections[Number(button.dataset.section)];
+      this._activeSectionSlot = section.slot;
+      this._canvasCard = {sectionId:section.section_id,entityId:section.bindings[Number(button.dataset.binding)].target_id};
+    }
+    if (action === "add-library-entity") {
+      const index = Number(button.dataset.screen), screen = this._draft.screens[index];
+      this._addCanvasEntity(index, screen.sections.findIndex((section) => section.slot === this._activeSectionSlot), button.dataset.libraryEntity);
+    }
+    if (action === "add-library-panel") this._addFreeformSection(Number(button.dataset.screen),button.dataset.panelType);
+    if (action === "duplicate-canvas-panel") {
+      const screen = this._draft.screens[Number(button.dataset.screen)];
+      if (screen.sections.length < 20) {
+        const original = screen.sections[Number(button.dataset.section)];
+        this._addFreeformSection(Number(button.dataset.screen),original.type);
+        const fresh = screen.sections[screen.sections.length - 1], copy = clone(original);
+        Object.assign(fresh,copy,{section_id:fresh.section_id,slot:fresh.slot,title:`${original.title || label(original.type)} copy`.slice(0,80)});
+        delete fresh.grid_column;delete fresh.grid_row;
+      } else this._message = "This screen has 20 panels.";
+    }
+    if (action === "nudge-panel") this._adjustPanel(Number(button.dataset.screen), Number(button.dataset.section), "nudge", button.dataset.direction);
+    if (action === "reorder-canvas-card") {
+      const screen = this._draft.screens[Number(button.dataset.screen)], section = screen.sections[Number(button.dataset.section)];
+      const from = Number(button.dataset.binding), to = from + Number(button.dataset.direction);
+      if (to >= 0 && to < section.bindings.length) [section.bindings[from],section.bindings[to]] = [section.bindings[to],section.bindings[from]];
+    }
+    if (action === "undo-grid") this._undoGridLayout(this._draft.screens[Number(button.dataset.screen)]);
+    if (action === "grid-viewport") this._gridViewport = button.dataset.viewport;
+    if (action === "grid-preset") this._applyGridPreset(Number(button.dataset.screen), button.dataset.preset);
+    if (action === "auto-grid") {
+      const screen = this._draft.screens[Number(button.dataset.screen)];
+      this._rememberGridLayout(screen);
+      screen.sections.forEach((section) => { delete section.grid_column; delete section.grid_row; });
+    }
+    if (action === "place-grid-panel") {
+      const screen = this._draft.screens[Number(button.dataset.screen)];
+      const section = screen.sections.find((section) => section.slot === this._activeSectionSlot);
+      if (section) {
+        this._rememberGridLayout(screen);
+        Object.assign(section, {grid_column: Number(button.dataset.gridColumn), grid_row: Number(button.dataset.gridRow)});
+      }
+    }
     if (action === "select-layout") this._applyComposition(Number(button.dataset.screen), button.dataset.composition);
     if (action === "open-panel-yaml") this._editorDialog = { type: "yaml", screen: Number(button.dataset.screen), section: Number(button.dataset.section) };
     if (action === "apply-panel-yaml") {
@@ -736,6 +1262,7 @@ class BiofectsButlerPanel extends HTMLElement {
     if (action === "remove-screen") this._removeScreen(Number(button.dataset.index));
     if (action === "move-screen") this._move(this._draft.screens, Number(button.dataset.index), Number(button.dataset.direction));
     if (action === "add-section") this._addSection(Number(button.dataset.screen), button.dataset.slot);
+    if (action === "add-freeform-section") this._addFreeformSection(Number(button.dataset.screen), button.dataset.panelType);
     if (action === "remove-section") this._draft.screens[Number(button.dataset.screen)].sections.splice(Number(button.dataset.index), 1);
     if (action === "toggle-panel-height") {
       const section = this._draft.screens[Number(button.dataset.screen)].sections[Number(button.dataset.section)];
@@ -750,6 +1277,7 @@ class BiofectsButlerPanel extends HTMLElement {
       section.actions ||= [];
       section.actions.push({ gesture: "tap", type: "call_service", name: "New Command", icon: "mdi:gesture-tap-button", icon_height: 48, domain: "script", service: scriptService });
     }
+    if (action === "add-form-action") this._addFormAction(Number(button.dataset.screen), Number(button.dataset.section));
     if (action === "add-form-action") {
       const section = this._draft.screens[Number(button.dataset.screen)].sections[Number(button.dataset.section)];
       section.actions ||= [];
@@ -757,7 +1285,11 @@ class BiofectsButlerPanel extends HTMLElement {
     }
     if (action === "remove-section-action") this._draft.screens[Number(button.dataset.screen)].sections[Number(button.dataset.section)].actions.splice(Number(button.dataset.index), 1);
     if (action === "open-entity-picker") this._editorDialog = { type: "add", screen: Number(button.dataset.screen), section: Number(button.dataset.section), domain: button.dataset.entityDomain || null };
-    if (action === "toggle-picker-entity") this._togglePickerEntity(button);
+    if (action === "toggle-picker-entity") {
+      this._togglePickerEntity(button);
+      this._refreshPickerEntity(button);
+      return;
+    }
     if (action === "edit-binding") this._editorDialog = { type: "edit", screen: Number(button.dataset.screen), section: Number(button.dataset.section), binding: Number(button.dataset.binding) };
     if (action === "close-editor-dialog") {
       if (button.classList.contains("editor-modal") && event.target.closest("[data-dialog-card]")) return;
@@ -785,7 +1317,23 @@ class BiofectsButlerPanel extends HTMLElement {
     this._syncDefaultPopupActions(section, entityIds);
   }
 
+  _refreshPickerEntity(button) {
+    const section = this._draft.screens[Number(button.dataset.screen)].sections[Number(button.dataset.section)];
+    const selected = (section.bindings || []).some((binding) => binding.kind === "entity" && binding.target_id === button.dataset.entityId);
+    const state = this._hass?.states?.[button.dataset.entityId];
+    const icon = state?.attributes?.icon || this._defaultIcon(button.dataset.entityId, state?.attributes?.device_class);
+    button.classList.toggle("selected", selected);
+    button.querySelector("ha-icon")?.setAttribute("icon", selected ? "mdi:checkbox-marked" : icon);
+    const status = button.querySelector("em");
+    if (status) status.textContent = selected ? "SELECTED" : state?.state || "unknown";
+  }
+
   _onInput(event) {
+    if (event.target.dataset.librarySearch !== undefined) {
+      this._libraryQuery = event.target.value;
+      this.shadowRoot.querySelector(".visual-library-entities").innerHTML = this._visualLibraryEntities(Number(event.target.dataset.libraryScreen));
+      return;
+    }
     if (event.target.dataset.actionIndex !== undefined
       && (event.target.dataset.actionField !== undefined || event.target.dataset.actionServiceCall !== undefined)) {
       this._updateActionInput(event.target);
@@ -816,7 +1364,33 @@ class BiofectsButlerPanel extends HTMLElement {
   }
 
   _onChange(event) {
+    if (event.target.type === "number" && !event.target.checkValidity()) { event.target.reportValidity(); return; }
+    if (event.composedPath().some((element) => element?.localName === "ha-selector")) return;
     const element = event.target;
+    if (element.id === "lovelace-dashboard") {
+      this._lovelaceDashboardPath = element.value;
+      this._lovelaceSource = null;
+      this._lovelaceViewIndex = 0;
+      return;
+    }
+    if (element.hasAttribute("data-editor-display")) {
+      if (element.value) this._editDisplay(element.value);
+      return;
+    }
+    if (element.id === "layout-preview-theme") {
+      this._previewTheme = element.value;
+      this._render();
+      return;
+    }
+    if (element.id === "lovelace-view") {
+      this._lovelaceViewIndex = Number(element.value);
+      return;
+    }
+    if (element.id === "lovelace-import-mode") {
+      this._lovelaceImportMode = element.value;
+      this._render();
+      return;
+    }
     if (element.dataset.action === "select-profile") {
       this._selectProfile(element.value);
       return;
@@ -826,12 +1400,67 @@ class BiofectsButlerPanel extends HTMLElement {
       this._assign(element.dataset.displayProfile, element.value, theme);
       return;
     }
+    if (element.dataset.displayPickleBackground) {
+      if (!Object.hasOwn(PICKLE_RICK_BACKGROUNDS, element.value)) return;
+      const displayId = element.dataset.displayPickleBackground;
+      if (this._snapshot.display_themes?.[displayId]?.split("__")[0] !== "pickle_rick") return;
+      const profileId = this._snapshot.assignments?.[displayId] || "default";
+      this._assign(displayId, profileId, "pickle_rick" + (element.value === "plain" ? "" : `__${element.value}`));
+      return;
+    }
+    if (element.dataset.displayBenderBackground) {
+      if (!Object.hasOwn(BENDER_BACKGROUNDS, element.value)) return;
+      const displayId = element.dataset.displayBenderBackground;
+      if (this._snapshot.display_themes?.[displayId]?.split("__")[0] !== "futurama_bender") return;
+      const profileId = this._snapshot.assignments?.[displayId] || "default";
+      this._assign(displayId, profileId, "futurama_bender" + (element.value === "plain" ? "" : `__${element.value}`));
+      return;
+    }
+    if (element.dataset.displayBackground) {
+      if (!SIMPSONS_BACKGROUNDS[element.value]) return;
+      const displayId = element.dataset.displayBackground;
+      const character = this._snapshot.display_themes?.[displayId]?.split("__")[0];
+      if (!SIMPSONS_CHARACTERS[character]) return;
+      const profileId = this._snapshot.assignments?.[displayId] || "default";
+      this._assign(displayId, profileId, character + (element.value === "plain" ? "" : `__${element.value}`));
+      return;
+    }
+    if (element.dataset.displayCharacter) {
+      if (!SIMPSONS_CHARACTERS[element.value]) return;
+      const displayId = element.dataset.displayCharacter;
+      const background = this._snapshot.display_themes?.[displayId]?.split("__")[1] || "plain";
+      const profileId = this._snapshot.assignments?.[displayId] || "default";
+      this._assign(displayId, profileId, element.value + (background === "plain" ? "" : `__${background}`));
+      return;
+    }
     if (element.dataset.displayTheme) {
       const profileId = this._snapshot.assignments?.[element.dataset.displayTheme] || "default";
       this._assign(element.dataset.displayTheme, profileId, element.value);
       return;
     }
     if (!this._draft) return;
+    if (element.dataset.quickPanel !== undefined) {
+      const section = this._draft.screens[Number(element.dataset.screen)].sections[Number(element.value)];
+      this._activeSectionSlot = section.slot; this._canvasCard = null; this._render(); return;
+    }
+    if (element.dataset.quickPosition !== undefined || element.dataset.quickSize !== undefined) {
+      if (!element.value) return;
+      this._adjustPanel(Number(element.dataset.screen), Number(element.dataset.section), element.dataset.quickSize || "position", element.value);
+      this._render(); return;
+    }
+    if (element.dataset.formTarget !== undefined) {
+      const section = this._draft.screens[Number(element.dataset.screen)].sections[Number(element.dataset.section)];
+      const target = element.value;
+      if (!target) section.actions = (section.actions || []).filter((item) => item.role !== "form_submit");
+      else {
+        const domain = target.split(".", 1)[0];
+        const action = section.actions?.find((item) => item.role === "form_submit") || { gesture: "tap", type: "call_service", role: "form_submit", name: "Submit" };
+        Object.assign(action, { gesture: "tap", type: "call_service", role: "form_submit", domain, service: domain === "automation" ? "trigger" : "turn_on", target_id: target });
+        section.actions = [action, ...(section.actions || []).filter((item) => item !== action && item.role !== "form_submit")];
+      }
+      this._render();
+      return;
+    }
     if (element.dataset.greetingWeather !== undefined) {
       if (element.value) this._draft.greeting_weather_entity_id = element.value;
       else delete this._draft.greeting_weather_entity_id;
@@ -853,6 +1482,46 @@ class BiofectsButlerPanel extends HTMLElement {
       const binding = this._bindingAt(element);
       const name = element.value.trim();
       if (name) binding.name = name; else delete binding.name;
+      this._render();
+      return;
+    }
+    if (element.dataset.bindingGroup !== undefined) {
+      const binding = this._bindingAt(element);
+      const group = element.value.trim();
+      if (group) binding.group = group; else delete binding.group;
+      this._render();
+      return;
+    }
+    if (element.dataset.showPageHeader !== undefined) {
+      const screen = this._draft.screens[Number(element.dataset.screen)];
+      if (element.checked) delete screen.show_header; else screen.show_header = false;
+      this._render();return;
+    }
+    if (element.dataset.designTitle !== undefined || element.dataset.designText !== undefined || element.dataset.designImage !== undefined) {
+      const section = this._draft.screens[Number(element.dataset.screen)].sections[Number(element.dataset.section)];
+      const field = element.dataset.designTitle !== undefined ? "title" : element.dataset.designText !== undefined ? "secondary_title" : "default_image";
+      const value = element.value.trim();
+      if (value) section[field] = value; else delete section[field];
+      this._render();return;
+    }
+    if (element.dataset.moveCanvasCard !== undefined) {
+      this._moveCanvasBinding({screen:Number(element.dataset.screen),section:Number(element.dataset.section),binding:Number(element.dataset.binding)},Number(element.dataset.screen),Number(element.value));
+      this._render();return;
+    }
+    if (element.dataset.bindingDisplayMode !== undefined) {
+      const binding = this._bindingAt(element);
+      if (element.value === "tile") {
+        binding.display_mode = "tile";
+        binding.card_width ||= 2;
+      } else delete binding.display_mode;
+      this._render();
+      return;
+    }
+    if (element.dataset.bindingCardWidth !== undefined || element.dataset.bindingCardHeight !== undefined || element.dataset.bindingCardShape !== undefined) {
+      const binding = this._bindingAt(element);
+      if (element.dataset.bindingCardWidth !== undefined) binding.card_width = Number(element.value);
+      if (element.dataset.bindingCardHeight !== undefined) binding.card_height = Number(element.value);
+      if (element.dataset.bindingCardShape !== undefined) binding.card_shape = element.value;
       this._render();
       return;
     }
@@ -906,17 +1575,26 @@ class BiofectsButlerPanel extends HTMLElement {
       this._render();
       return;
     }
+    if (!element.dataset.profileField && element.dataset.screen === undefined) return;
     if (element.dataset.profileField) this._draft[element.dataset.profileField] = element.value;
     if (element.dataset.screen !== undefined && element.dataset.section === undefined) {
       const screen = this._draft.screens[Number(element.dataset.screen)];
-      screen[element.dataset.field] = element.value;
       if (element.dataset.field === "composition") {
-        const slots = COMPOSITIONS[element.value];
-        screen.sections = screen.sections.slice(0, slots.length).map((section, index) => ({ ...section, slot: slots[index] }));
+        this._applyComposition(Number(element.dataset.screen), element.value);
+        this._render();
+        return;
       }
+      if (["grid_columns", "grid_row_height", "grid_gap"].includes(element.dataset.field)) this._rememberGridLayout(screen);
+      screen[element.dataset.field] = ["grid_columns", "grid_row_height", "grid_gap", "font_scale"].includes(element.dataset.field) ? Number(element.value) : element.value;
+      if (element.dataset.field === "command_layout") { this._render(); return; }
     }
     if (element.dataset.section !== undefined) {
       const section = this._draft.screens[Number(element.dataset.screen)].sections[Number(element.dataset.section)];
+      if (element.dataset.formActionName !== undefined) {
+        const action = section.actions?.find((item) => item.role === "form_submit");
+        if (action) action.name = element.value.trim() || "Submit";
+        return;
+      }
       if (element.dataset.sectionType !== undefined) {
         section.type = element.value;
         this._render();
@@ -937,7 +1615,8 @@ class BiofectsButlerPanel extends HTMLElement {
         const action = section.actions[Number(element.dataset.actionIndex)];
         if (element.dataset.actionField === "type") this._resetAction(action, element.value);
       } else {
-        section[element.dataset.field] = element.type === "number" ? Number(element.value) : element.value;
+        if (["column_span", "row_span", "grid_column", "grid_row"].includes(element.dataset.field)) this._rememberGridLayout(this._draft.screens[Number(element.dataset.screen)]);
+        section[element.dataset.field] = element.type === "number" || ["column_span", "row_span", "grid_column", "grid_row"].includes(element.dataset.field) ? Number(element.value) : element.value;
       }
     }
     this._render();
@@ -963,7 +1642,9 @@ class BiofectsButlerPanel extends HTMLElement {
 
   _new() {
     const base = `profile_${Date.now()}`;
-    this._draft = { schema_version: 1, profile_id: base, name: "New Profile", default_screen_id: "home", screens: [{ screen_id: "home", title: "Home", composition: "radial_command_overview", sections: [{ section_id: "overview", type: "status_overview", slot: "overview" }] }] };
+    this._draft = {schema_version:1,profile_id:base,name:"New Profile",default_screen_id:"home",screens:[{screen_id:"home",title:"Home",composition:"freeform_grid",grid_columns:12,grid_row_height:120,grid_gap:16,sections:[]}]};
+    this._activeWorkspace = "screens";
+    this._activeScreenId = "home";
     this._draft.screens.forEach((screen) => this._ensureScreenSections(screen));
     this._selectedId = null;
     this._message = "New profile is not saved yet.";
@@ -976,6 +1657,7 @@ class BiofectsButlerPanel extends HTMLElement {
     this._selectedId = profileId;
     this._draft = clone(profile);
     this._draft.screens.forEach((screen) => this._ensureScreenSections(screen));
+    this._loadedProfile = clone(profile);
     this._activeScreenId = this._draft.default_screen_id;
     this._editorDialog = null;
     this._message = "";
@@ -1058,7 +1740,7 @@ class BiofectsButlerPanel extends HTMLElement {
 
   _addScreen() {
     const id = `screen_${Date.now()}`;
-    const screen = { screen_id: id, title: "New Screen", composition: "focused_control", sections: [] };
+    const screen = { screen_id: id, title: "New Screen", composition: "freeform_grid", sections: [] };
     this._draft.screens.push(screen);
     this._seedScreenSections(screen);
     this._activeScreenId = id;
@@ -1076,9 +1758,30 @@ class BiofectsButlerPanel extends HTMLElement {
 
   _addSection(screenIndex, requestedSlot) {
     const screen = this._draft.screens[screenIndex];
+    if (!screen || screen.composition === "freeform_grid") return;
     const used = new Set(screen.sections.map((section) => section.slot));
     const slotName = COMPOSITIONS[screen.composition].find((candidate) => candidate === requestedSlot && !used.has(candidate));
     if (slotName) screen.sections.push({ section_id: `${slug(slotName)}_${Date.now()}`, type: slotName === "media" ? "media" : slotName === "events" ? "events" : "entity_controls", slot: slotName, bindings: [], actions: [] });
+  }
+
+  _addFreeformSection(screenIndex, type) {
+    const screen = this._draft.screens[screenIndex];
+    if (!screen || screen.composition !== "freeform_grid" || screen.sections.length >= 20 || !SECTION_TYPES.includes(type)) return;
+    const used = new Set(screen.sections.map((section) => section.slot));
+    let index = 1;
+    while (used.has(`panel_${index}`)) index += 1;
+    const slot = `panel_${index}`;
+    screen.sections.push({
+      section_id: `${slot}_${Date.now()}`,
+      type,
+      slot,
+      bindings: [],
+      actions: [],
+      column_span: Math.max(1,Math.ceil(Number(screen.grid_columns || 4) / 2)),
+      row_span: screen.grid_row_height && screen.grid_row_height <= 120 ? 3 : 1,
+    });
+    this._activeSectionSlot = slot;
+    this._canvasCard = null;
   }
 
   _addSectionAction(screenIndex, sectionIndex) {
@@ -1137,7 +1840,7 @@ class BiofectsButlerPanel extends HTMLElement {
     const slots = COMPOSITIONS[screen.composition] || COMPOSITIONS.focused_control;
     const scriptService = Object.keys(this._hass?.states || {}).find((entityId) => entityId.startsWith("script."))?.substring(7) || "turn_on";
     screen.sections = (screen.sections || [])
-      .filter((section) => slots.includes(section.slot))
+      .filter((section) => screen.composition === "freeform_grid" || slots.includes(section.slot))
       .map((section) => {
         const actions = (section.actions || []).map((action) => section.type !== "quick_commands" || ["call_service", "toggle"].includes(action.type)
           ? action
@@ -1155,15 +1858,70 @@ class BiofectsButlerPanel extends HTMLElement {
   }
 
   _seedScreenSections(screen) {
+    if (screen.composition === "freeform_grid") {
+      screen.sections = [{ section_id: `panel_1_${Date.now()}`, type: "entity_controls", slot: "panel_1", bindings: [], actions: [], column_span: Math.ceil(Number(screen.grid_columns || 4) / 2), row_span: screen.grid_row_height && screen.grid_row_height <= 120 ? 3 : 1 }];
+      return;
+    }
     const slots = COMPOSITIONS[screen.composition] || COMPOSITIONS.focused_control;
     screen.sections = slots.map((slot, index) => ({ section_id: `${slug(slot)}_${Date.now()}_${index}`, type: slot === "media" ? "media" : slot === "events" ? "events" : "entity_controls", slot, bindings: [], actions: [] }));
   }
 
   _applyComposition(screenIndex, composition) {
     const screen = this._draft.screens[screenIndex];
-    if (!screen || !COMPOSITIONS[composition] || screen.composition === composition) return;
+    if (!screen || !Object.hasOwn(COMPOSITIONS, composition) || screen.composition === composition) return;
     const slots = COMPOSITIONS[composition];
+    const isHome = screen.screen_id === "home";
+    const previousComposition = screen.composition;
     screen.composition = composition;
+    if (composition === "freeform_grid") {
+      if (isHome && previousComposition === "radial_command_overview") {
+        screen.sections = screen.sections.map((section) => section.slot === "reactor" ? { ...section, type: "assistant" } : section);
+      }
+      if (!screen.sections.length) {
+        this._seedScreenSections(screen);
+      } else {
+        screen.sections.forEach((section, index) => {
+          section.slot = `panel_${index + 1}`;
+          section.column_span = Number(section.column_span || 2);
+          section.row_span = Number(section.row_span || 1);
+        });
+      }
+      return;
+    }
+    if (isHome && previousComposition === "freeform_grid" && composition === "radial_command_overview") {
+      const contentSlots = ["overview", "reactor", "media", "events"];
+      const mapped = [];
+      for (const section of screen.sections) {
+        const preferred = section.type === "assistant" || section.section_id === "assistant" ? "reactor"
+          : section.type === "media" ? "media"
+            : section.type === "events" ? "events"
+              : section.type === "status_overview" || section.section_id.includes("overview") ? "overview"
+                : null;
+        const slot = (preferred && contentSlots.includes(preferred) && !mapped.some((item) => item.slot === preferred))
+          ? preferred
+          : contentSlots.find((candidate) => !mapped.some((item) => item.slot === candidate));
+        if (!slot) {
+          this._message = "Command Center supports up to four Home content panels. Remove extra panels before switching layouts.";
+          screen.composition = previousComposition;
+          this._render();
+          return;
+        }
+        mapped.push({ ...section, slot });
+      }
+      for (const slot of slots) {
+        if (mapped.some((section) => section.slot === slot)) continue;
+        mapped.push({
+          section_id: `${slug(slot)}_${Date.now()}_${mapped.length}`,
+          type: slot === "left_menu" || slot === "right_menu" ? "orbital_menu" : slot === "reactor" ? "assistant" : slot === "media" ? "media" : slot === "events" ? "events" : "status_overview",
+          slot,
+          bindings: [],
+          actions: [],
+        });
+      }
+      screen.sections = mapped;
+      this._ensureHomeSidebarBlueprint(screen);
+      return;
+    }
     screen.sections = screen.sections.slice(0, slots.length).map((section, index) => ({ ...section, slot: slots[index] }));
   }
 
@@ -1179,8 +1937,10 @@ class BiofectsButlerPanel extends HTMLElement {
   }
 
   _setBindingTapAction(section, entityId, type) {
+    if (type === "activate" && !/^(scene|script|automation)\./.test(entityId)) { this._message = "Run is available for scenes, scripts and automations.";return; }
     const otherActions = (section.actions || []).filter((action) => action.target_id !== entityId || action.gesture !== "tap" || !["more_info", "toggle", "activate"].includes(action.type));
-    section.actions = (type === "none" ? otherActions : [{ gesture: "tap", type, target_id: entityId }, ...otherActions]).slice(0, 20);
+    if (type !== "none" && otherActions.length >= 20) { this._message = "This panel has 20 actions. Remove an action before adding another.";return; }
+    section.actions = type === "none" ? otherActions : [{gesture:"tap",type,target_id:entityId},...otherActions];
   }
 
   _removeBinding(screenIndex, sectionIndex, bindingIndex) {
@@ -1189,40 +1949,151 @@ class BiofectsButlerPanel extends HTMLElement {
     if (binding?.kind === "entity") section.actions = (section.actions || []).filter((action) => action.target_id !== binding.target_id);
   }
 
+  _onCanvasResize(event) {
+    const handle = event.target.closest(".canvas-resize");
+    if (!handle || (event.pointerType === "mouse" && event.button !== 0)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const screen = this._draft.screens[Number(handle.dataset.resizeScreen)];
+    const index = Number(handle.dataset.resizeIndex);
+    const section = screen.sections[index];
+    const placement = dashboardGridPlacements(screen)[index];
+    const panel = handle.closest(".canvas-panel");
+    const canvas = panel.closest(".advanced-canvas");
+    const gap = Number(screen.grid_gap ?? 10) / 3;
+    const stepX = (canvas.getBoundingClientRect().width + gap) / Number(screen.grid_columns || 4);
+    const stepY = Math.round(Number(screen.grid_row_height || 240) / 2) + gap;
+    const startX = event.clientX, startY = event.clientY;
+    const pointerId = event.pointerId;
+    let width = placement.width, height = placement.height;
+    panel.draggable = false;
+    const move = (next) => {
+      if (next.pointerId !== pointerId) return;
+      width = Math.max(1, Math.min(Number(screen.grid_columns || 4) - placement.column, placement.width + Math.round((next.clientX - startX) / stepX)));
+      height = Math.max(1, Math.min(8, placement.height + Math.round((next.clientY - startY) / stepY)));
+      panel.style.gridColumn = `${placement.column + 1}/span ${width}`;
+      panel.style.gridRow = `${placement.row + 1}/span ${height}`;
+    };
+    const end = (next) => {
+      if (next.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      if (next.type !== "pointercancel" && (width !== placement.width || height !== placement.height)) {
+        this._rememberGridLayout(screen);
+        Object.assign(section, {column_span:width, row_span:height});
+      }
+      this._render();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  }
+
   _onDragStart(event) {
+    const library = event.target.closest("[data-library-entity],[data-library-panel]");
+    if (library) {
+      event.dataTransfer.effectAllowed = "copy";
+      event.dataTransfer.setData("application/x-butler-library",JSON.stringify({entityId:library.dataset.libraryEntity,type:library.dataset.libraryPanel,screen:Number(library.dataset.screen)}));return;
+    }
     const card = event.target.closest("[data-binding-card]");
-    if (!card) return;
+    if (card) {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("application/x-butler-binding",JSON.stringify({screen:Number(card.dataset.screen),section:Number(card.dataset.section),binding:Number(card.dataset.binding)}));return;
+    }
+    const panel = event.target.closest("[data-panel-drag]");
+    if (!panel) return;
     event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("application/x-butler-binding", JSON.stringify({ screen: Number(card.dataset.screen), section: Number(card.dataset.section), binding: Number(card.dataset.binding) }));
-    card.classList.add("dragging");
+    event.dataTransfer.setData("application/x-butler-panel",JSON.stringify({screen:Number(panel.dataset.panelScreen),id:panel.dataset.panelId}));
   }
 
   _onDragOver(event) {
+    if (event.target.closest("[data-drop-panel], .canvas-cell:not(:disabled)")) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = [...event.dataTransfer.types].includes("application/x-butler-library") ? "copy" : "move";
+      return;
+    }
     if (event.target.closest("[data-drop-section]")) {
       event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
+      event.dataTransfer.dropEffect = [...event.dataTransfer.types].includes("application/x-butler-library") ? "copy" : "move";
     }
   }
 
   _onDrop(event) {
+    const libraryData = event.dataTransfer.getData("application/x-butler-library");
+    if (libraryData) {
+      event.preventDefault();
+      const item = JSON.parse(libraryData), cell = event.target.closest(".canvas-cell"), panel = event.target.closest("[data-drop-section]");
+      const screenIndex = Number(cell?.dataset.screen ?? panel?.dataset.dropScreen);
+      if (!Number.isInteger(screenIndex) || !this._draft.screens[screenIndex]) return;
+      if (item.entityId) this._addCanvasEntity(screenIndex,panel ? Number(panel.dataset.dropSection) : -1,item.entityId,cell ? {column:Number(cell.dataset.gridColumn),row:Number(cell.dataset.gridRow)} : null);
+      else if (item.type && cell) {
+        const screen = this._draft.screens[screenIndex], count = screen.sections.length;
+        this._addFreeformSection(screenIndex,item.type);
+        if (screen.sections.length > count) Object.assign(screen.sections[screen.sections.length - 1],{grid_column:Number(cell.dataset.gridColumn),grid_row:Number(cell.dataset.gridRow)});
+      }
+      this._render();return;
+    }
+    const cell = event.target.closest(".canvas-cell:not(:disabled)");
+    const movingCard = event.dataTransfer.getData("application/x-butler-binding");
+    if (cell && movingCard) {
+      event.preventDefault();
+      const source = JSON.parse(movingCard), index = Number(cell.dataset.screen), screen = this._draft.screens[index];
+      const count = screen.sections.length;
+      this._addFreeformSection(index,"entity_controls");
+      if (screen.sections.length === count) { this._message = "This screen has 20 panels.";this._render();return; }
+      const section = screen.sections[screen.sections.length - 1];
+      Object.assign(section,{grid_column:Number(cell.dataset.gridColumn),grid_row:Number(cell.dataset.gridRow)});
+      if (!this._moveCanvasBinding(source,index,screen.sections.length - 1)) screen.sections.pop();
+      this._render();return;
+    }
+    const encodedPanel = event.dataTransfer.getData("application/x-butler-panel");
+    if (cell && encodedPanel) {
+      event.preventDefault();
+      const source = JSON.parse(encodedPanel);
+      if (source.screen !== Number(cell.dataset.screen)) return;
+      const section = this._draft.screens[source.screen]?.sections.find((section) => section.section_id === source.id);
+      if (!section) return;
+      this._rememberGridLayout(this._draft.screens[source.screen]);
+      Object.assign(section, {grid_column:Number(cell.dataset.gridColumn), grid_row:Number(cell.dataset.gridRow)});
+      this._activeSectionSlot = section.slot;
+      this._render();
+      return;
+    }
+    const destinationPanel = event.target.closest("[data-drop-panel]");
+    const panelEncoded = event.dataTransfer.getData("application/x-butler-panel");
+    if (destinationPanel && panelEncoded) {
+      event.preventDefault();
+      const source = JSON.parse(panelEncoded);
+      const sourceScreen = this._draft.screens[source.screen];
+      const destinationScreenIndex = Number(destinationPanel.dataset.panelScreen);
+      if (sourceScreen !== this._draft.screens[destinationScreenIndex]) return;
+      const sourceIndex = sourceScreen.sections.findIndex((section) => section.section_id === source.id);
+      const destinationIndex = sourceScreen.sections.findIndex((section) => section.section_id === destinationPanel.dataset.dropPanel);
+      if (sourceIndex < 0 || destinationIndex < 0 || sourceIndex === destinationIndex) return;
+      const sourceSection = sourceScreen.sections[sourceIndex];
+      const destinationSection = sourceScreen.sections[destinationIndex];
+      if (sourceScreen.composition === "freeform_grid") {
+        this._rememberGridLayout(sourceScreen);
+        const positions = dashboardGridPlacements(sourceScreen);
+        const from = positions[sourceIndex], to = positions[destinationIndex];
+        Object.assign(sourceSection, {grid_column:to.column + 1, grid_row:Math.min(40, to.row + 1)});
+        Object.assign(destinationSection, {grid_column:from.column + 1, grid_row:Math.min(40, from.row + 1)});
+        this._activeSectionSlot = sourceSection.slot;
+      } else {
+        [sourceSection.slot, destinationSection.slot] = [destinationSection.slot, sourceSection.slot];
+        this._activeSectionSlot = sourceSection.slot;
+      }
+      this._render();
+      return;
+    }
     const destination = event.target.closest("[data-drop-section]");
     const encoded = event.dataTransfer.getData("application/x-butler-binding");
     if (!destination || !encoded) return;
     event.preventDefault();
     const source = JSON.parse(encoded);
-    const sourceSection = this._draft.screens[source.screen].sections[source.section];
-    const sourceBindings = sourceSection.bindings;
-    const [binding] = sourceBindings.splice(source.binding, 1);
-    const destinationSection = this._draft.screens[Number(destination.dataset.dropScreen)].sections[Number(destination.dataset.dropSection)];
     const targetCard = event.target.closest("[data-binding-card]");
-    let destinationIndex = targetCard ? Number(targetCard.dataset.binding) : destinationSection.bindings.length;
-    if (destinationSection === this._draft.screens[source.screen].sections[source.section] && source.binding < destinationIndex) destinationIndex -= 1;
-    destinationSection.bindings.splice(destinationIndex, 0, binding);
-    if (sourceSection !== destinationSection) {
-      const tapAction = (sourceSection.actions || []).find((action) => action.target_id === binding.target_id && action.gesture === "tap" && ["more_info", "toggle", "activate"].includes(action.type));
-      sourceSection.actions = (sourceSection.actions || []).filter((action) => action !== tapAction);
-      this._setBindingTapAction(destinationSection, binding.target_id, tapAction?.type || "none");
-    }
+    this._moveCanvasBinding(source,Number(destination.dataset.dropScreen),Number(destination.dataset.dropSection),targetCard ? Number(targetCard.dataset.binding) : null);
     this._render();
   }
 
@@ -1246,34 +2117,19 @@ class BiofectsButlerPanel extends HTMLElement {
   }
 
   async _importLovelace() {
-    const path = this.shadowRoot.querySelector("#lovelace-dashboard")?.value;
+    const path = this._lovelaceDashboardPath || this.shadowRoot.querySelector("#lovelace-dashboard")?.value;
     if (!path) return;
     this._message = "Reading Home Assistant dashboard...";
     this._render();
     try {
-      const request = { type: "lovelace/config" };
-      if (path !== "lovelace") request.url_path = path;
-      const config = await this._hass.callWS(request);
+      const config = await this._readLovelaceConfig(path);
       const panel = this._hass.panels?.[path];
       const usedScreenIds = new Set();
       const screens = (config.views || []).slice(0, 20).map((view, index) => {
-        let screenId = slug(view.path || view.title || `screen_${index + 1}`) || `screen_${index + 1}`;
+        let screenId = index === 0 ? "home" : slug(view.path || view.title || `screen_${index + 1}`) || `screen_${index + 1}`;
         while (usedScreenIds.has(screenId)) screenId = `${screenId}_${index + 1}`;
         usedScreenIds.add(screenId);
-        const entityIds = [...this._entitiesFromLovelace(view)].filter((entityId) => this._hass.states?.[entityId]).slice(0, 100);
-        const sectionType = this._sectionTypeForEntities(entityIds);
-        const section = {
-          section_id: `${screenId}_content`,
-          type: sectionType,
-          slot: index === 0 ? "overview" : "core",
-          bindings: entityIds.map((target_id) => ({ kind: "entity", target_id })),
-        };
-        return {
-          screen_id: screenId,
-          title: String(view.title || label(screenId)).slice(0, 80),
-          composition: index === 0 ? "radial_command_overview" : "focused_control",
-          sections: [section],
-        };
+        return this._screenFromLovelaceView(view, screenId, index === 0);
       });
       if (!screens.length) throw new Error("This dashboard has no views to import.");
       const dashboardName = panel?.title || config.title || label(path);
@@ -1291,14 +2147,190 @@ class BiofectsButlerPanel extends HTMLElement {
           this._syncDefaultPopupActions(section, entityIds);
         });
       });
+      this._ensureHomeSidebarBlueprint(this._draft.screens[0]);
       this._selectedId = null;
-      const mappedEntities = screens.reduce((total, screen) => total + screen.sections[0].bindings.length, 0);
-      const emptyViews = screens.filter((screen) => screen.sections[0].bindings.length === 0).length;
+      this._activeWorkspace = "screens";
+      const mappedEntities = screens.reduce((total, screen) => total + screen.sections.reduce((screenTotal, section) => screenTotal + section.bindings.length, 0), 0);
+      const emptyViews = screens.filter((screen) => screen.sections.every((section) => section.bindings.length === 0)).length;
       this._message = `Created an unsaved draft from ${dashboardName}: ${mappedEntities} entities mapped${emptyViews ? `, ${emptyViews} view${emptyViews === 1 ? "" : "s"} need manual bindings` : ""}. Review actions, then save.`;
     } catch (error) {
       this._message = error?.message || "Home Assistant dashboard could not be imported.";
     }
     this._render();
+  }
+
+  async _readLovelaceConfig(path) {
+    if (this._lovelaceSource?.path === path) return this._lovelaceSource.config;
+    const request = { type: "lovelace/config" };
+    if (path !== "lovelace") request.url_path = path;
+    const config = await this._hass.callWS(request);
+    this._lovelaceDashboardPath = path;
+    this._lovelaceSource = { path, config };
+    return config;
+  }
+
+  async _loadLovelacePages() {
+    const path = this._lovelaceDashboardPath || this.shadowRoot.querySelector("#lovelace-dashboard")?.value;
+    if (!path) return;
+    this._message = "Reading dashboard pages...";
+    this._render();
+    try {
+      const config = await this._readLovelaceConfig(path);
+      if (!(config.views || []).length) throw new Error("This dashboard has no pages to import.");
+      this._lovelaceViewIndex = Math.min(this._lovelaceViewIndex, config.views.length - 1);
+      this._message = `Choose one of ${config.views.length} pages to add or replace.`;
+    } catch (error) {
+      this._message = error?.message || "Dashboard pages could not be loaded.";
+    }
+    this._render();
+  }
+
+  async _importLovelacePage() {
+    if (!this._draft || !this._lovelaceSource) return;
+    const view = this._lovelaceSource.config.views?.[this._lovelaceViewIndex];
+    if (!view) return;
+    const replacing = this._lovelaceImportMode === "replace";
+    const targetId = this.shadowRoot.querySelector("#lovelace-target-screen")?.value;
+    const targetIndex = replacing ? this._draft.screens.findIndex((screen) => screen.screen_id === targetId) : -1;
+    if (replacing && targetIndex < 0) return;
+    if (!replacing && this._draft.screens.length >= 20) {
+      this._message = "This profile already has the maximum of 20 screens. Replace an existing screen instead.";
+      this._render();
+      return;
+    }
+    const usedIds = new Set(this._draft.screens.map((screen) => screen.screen_id));
+    const baseId = slug(view.path || view.title || "imported_page") || "imported_page";
+    let screenId = replacing ? targetId : baseId;
+    for (let suffix = 2; usedIds.has(screenId) && !replacing; suffix += 1) screenId = `${baseId}_${suffix}`;
+    const screen = this._screenFromLovelaceView(view, screenId, screenId === "home");
+    this._ensureScreenSections(screen);
+    screen.sections.forEach((section) => {
+      const entityIds = section.bindings.filter((binding) => binding.kind === "entity").map((binding) => binding.target_id);
+      this._syncDefaultPopupActions(section, entityIds);
+    });
+    if (replacing) this._draft.screens[targetIndex] = screen;
+    else this._draft.screens.push(screen);
+    if (screenId === "home") this._ensureHomeSidebarBlueprint(screen);
+    const linkedFromHome = replacing || screenId === "home" || this._addHomeNavigation(screenId);
+    this._activeScreenId = screenId;
+    this._activeWorkspace = "screens";
+    this._message = `${screen.title} ${replacing ? "replaced" : "added"}. ${linkedFromHome ? "Review it, then save the profile." : "Both Home menus are full; remove or replace a screen, or add navigation manually before saving."}`;
+    this._render();
+  }
+
+  _screenFromLovelaceView(view, screenId, isHome) {
+    const entityIds = [...this._entitiesFromLovelace(view)].filter((entityId) => this._hass.states?.[entityId]).slice(0, 100);
+    const bindings = (ids) => ids.map((target_id) => ({ kind: "entity", target_id }));
+    const title = String(view.title || label(screenId)).slice(0, 80);
+    if (!isHome) {
+      const presentation = this._lovelacePresentation(view);
+      const importedBindings = presentation.bindings.length ? presentation.bindings : bindings(entityIds);
+      return {
+        screen_id: screenId,
+        title,
+        composition: "full_page",
+        sections: [{
+          section_id: `${screenId}_content`,
+          type: this._sectionTypeForEntities(importedBindings.map((binding) => binding.target_id)),
+          slot: "full_page",
+          title,
+          bindings: importedBindings,
+          actions: presentation.actions,
+        }],
+      };
+    }
+    const calendarIds = entityIds.filter((entityId) => entityId.startsWith("calendar."));
+    const mediaIds = entityIds.filter((entityId) => entityId.startsWith("media_player."));
+    const overviewIds = entityIds.filter((entityId) => !calendarIds.includes(entityId) && !mediaIds.includes(entityId));
+    return {
+      screen_id: screenId,
+      title,
+      composition: "radial_command_overview",
+      command_layout: "orbital",
+      sections: [
+        { section_id: "home_overview", type: "entity_controls", slot: "overview", title: view.title || "Home Overview", bindings: bindings(overviewIds) },
+        { section_id: "home_left_menu", type: "orbital_menu", slot: "left_menu", bindings: [], actions: [] },
+        { section_id: "home_reactor", type: "entity_controls", slot: "reactor", bindings: [], actions: [] },
+        { section_id: "home_right_menu", type: "orbital_menu", slot: "right_menu", bindings: [], actions: [] },
+        ...(mediaIds.length ? [{ section_id: "home_media", type: "media", slot: "media", bindings: bindings(mediaIds) }] : []),
+        ...(calendarIds.length ? [{ section_id: "home_events", type: "events", slot: "events", bindings: bindings(calendarIds) }] : []),
+      ],
+    };
+  }
+
+  _lovelacePresentation(view) {
+    const bindings = [];
+    const actions = [];
+    const seen = new Set();
+    const heading = (card) => {
+      if (card?.type !== "markdown" || typeof card.content !== "string") return null;
+      return card.content.match(/^\s*#{1,6}\s+([^\n<]+)/)?.[1]?.trim().slice(0, 100) || null;
+    };
+    const add = (entityId, card, group, entry = card) => {
+      if (typeof entityId !== "string" || !this._hass.states?.[entityId] || seen.has(entityId) || bindings.length >= 100) return;
+      seen.add(entityId);
+      const binding = { kind: "entity", target_id: entityId };
+      const name = entry?.name || card?.name;
+      const icon = entry?.icon || card?.icon;
+      if (name) binding.name = String(name).slice(0, 100);
+      if (typeof icon === "string" && icon.startsWith("mdi:")) binding.icon = icon.slice(0, 100);
+      if (group) binding.group = group;
+      if (card?.type === "button") {
+        binding.display_mode = "tile";
+        binding.card_width = 2;
+      }
+      bindings.push(binding);
+      const domain = entityId.split(".", 1)[0];
+      const tapAction = card?.tap_action;
+      if (tapAction?.action === "more-info") actions.push({ gesture: "tap", type: "more_info", target_id: entityId });
+      else if (tapAction?.action === "toggle" || (card?.type === "button" && !tapAction && ["automation", "fan", "input_boolean", "light", "switch"].includes(domain))) {
+        actions.push({ gesture: "tap", type: "toggle", target_id: entityId });
+      } else {
+        const serviceName = tapAction?.action === "perform-action" ? tapAction.perform_action : tapAction?.action === "call-service" ? tapAction.service : null;
+        if (typeof serviceName === "string" && serviceName.includes(".")) {
+          const [serviceDomain, ...serviceParts] = serviceName.split(".");
+          const serviceTarget = tapAction?.target?.entity_id;
+          const targetId = typeof serviceTarget === "string" ? serviceTarget : Array.isArray(serviceTarget) ? serviceTarget[0] : entityId;
+          actions.push({ gesture: "tap", type: "call_service", source_id: entityId, target_id: targetId, domain: serviceDomain, service: serviceParts.join("."), ...(tapAction.data ? { data: tapAction.data } : {}) });
+        }
+      }
+    };
+    const walk = (card, inheritedGroup) => {
+      if (!card || typeof card !== "object") return;
+      let group = card.title || inheritedGroup || null;
+      if (Array.isArray(card.cards)) {
+        card.cards.forEach((child) => {
+          const childHeading = heading(child);
+          if (childHeading) group = childHeading;
+          else walk(child, group);
+        });
+        return;
+      }
+      const entityId = typeof card.entity === "string" ? card.entity : typeof card.entity_id === "string" ? card.entity_id : null;
+      if (entityId) add(entityId, card, group);
+      if (Array.isArray(card.entities)) card.entities.forEach((entry) => {
+        const entryId = typeof entry === "string" ? entry : entry?.entity;
+        add(entryId, card, group, entry);
+      });
+      const target = card.tap_action?.target?.entity_id;
+      const targetId = Array.isArray(target) ? target[0] : target;
+      if (!entityId && targetId) add(targetId, card, group);
+    };
+    const roots = Array.isArray(view.sections) ? view.sections : Array.isArray(view.cards) ? view.cards : [];
+    roots.forEach((card) => walk(card, card.title || null));
+    return { bindings, actions };
+  }
+
+  _addHomeNavigation(screenId) {
+    const home = this._draft.screens.find((screen) => screen.screen_id === "home");
+    const menus = home?.sections.filter((section) => ["left_menu", "right_menu"].includes(section.slot)) || [];
+    if (menus.some((section) => (section.actions || []).some((action) => action.type === "navigate" && action.target_id === screenId))) return true;
+    if (!menus.length) return false;
+    const destination = menus.find((section) => (section.actions || []).filter((action) => action.type === "navigate").length < 5);
+    if (!destination) return false;
+    destination.actions ||= [];
+    destination.actions.push({ gesture: "tap", type: "navigate", target_id: screenId });
+    return true;
   }
 
   _entitiesFromLovelace(value, found = new Set()) {
@@ -1364,12 +2396,17 @@ class BiofectsButlerPanel extends HTMLElement {
 
   _styles() {
     return `
+      .dashboard-start{display:grid;grid-template-columns:minmax(240px,1fr) auto;align-items:end;gap:12px;max-width:900px;padding:16px;border:1px solid #267680;background:#071014}.dashboard-start label{margin:0}.dashboard-start select{margin-top:6px}.dashboard-start button{display:flex;align-items:center;justify-content:center;gap:8px;min-width:220px}.dashboard-start button ha-icon{--mdc-icon-size:18px}.dashboard-start>small{grid-column:1/-1;color:var(--muted)}@container(max-width:600px){.dashboard-start{grid-template-columns:1fr}.dashboard-start button{min-width:0}}
+      .more-back{margin:0 0 10px}.more-option{display:grid;grid-template-columns:24px minmax(0,1fr) 20px;align-items:center;gap:10px;min-height:64px;text-align:left}.more-option>ha-icon{color:var(--cyan);--mdc-icon-size:20px}.more-option span strong,.more-option span small{display:block}.more-option span small{margin-top:4px;color:var(--muted);font-size:8px}
+      .panel-dimensions{display:flex;gap:5px;align-items:center;padding-right:5px}.panel-dimension{display:grid;gap:2px;min-width:48px}.panel-dimension span{color:var(--muted);font-size:6px}.panel-dimension select{min-height:28px;padding:3px;font-size:8px}.tile-appearance-settings{grid-column:1/-1;border:1px solid #17434a;padding:8px}.tile-appearance-settings summary{cursor:pointer;color:var(--cyan);font-size:8px}.tile-appearance-fields{display:grid;grid-template-columns:repeat(3,minmax(80px,1fr));gap:8px;padding-top:8px}.tile-appearance-fields label{display:grid;gap:4px;font-size:8px}.tile-appearance-fields select{min-height:30px}
       .backend-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid #143c42}.backend-row span strong,.backend-row span small{display:block}.backend-row span strong{font-size:9px}.backend-row span small{margin-top:2px;color:var(--muted);font-size:7px}.backend-configure{padding:6px 8px;border:1px solid var(--cyan);color:var(--cyan);font-size:8px;text-decoration:none}.entity-picker-option.selected{border-color:var(--cyan);background:#0b2a2f;color:var(--cyan)}.picker-done{display:block;width:calc(100% - 32px);margin:12px 16px 16px}
       .form-config-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:7px;margin:8px 0 12px;padding:9px;border:1px solid #17434a;background:#061014}.form-config-grid label{min-width:0;margin:0}.form-config-grid label span{display:block;margin-bottom:4px;color:var(--muted);font-size:7px}.form-config-grid input,.form-config-grid select{min-height:30px;padding:5px;font-size:8px}.form-config-grid input[type=color]{padding:2px}.config-heading{display:block;margin:9px 0 6px;color:var(--cyan);font-size:8px}.popup-settings{margin:0 0 8px}.popup-settings summary{cursor:pointer;color:var(--muted);font-size:8px}.action-list{display:grid;gap:7px}.calendar-form .action-row{grid-template-columns:110px 80px 110px minmax(100px,1fr) minmax(220px,2fr) 38px}
+      .form-builder-help,.form-builder-action{display:grid;gap:6px;margin:8px 0;padding:10px;border:1px solid #17434a;background:#061014}.form-builder-help strong,.form-builder-action strong{color:var(--cyan);font-size:9px}.form-builder-help span,.form-builder-action p{margin:0;color:var(--muted);font-size:8px;line-height:1.5}.form-builder-help a,.form-builder-action a{color:var(--cyan);font-size:8px}.form-builder-action label{margin:2px 0 0}.form-builder-action label span{display:block;margin-bottom:4px;font-size:7px}.form-builder-action input,.form-builder-action select{min-height:32px;padding:6px;font-size:9px}
       .quick-command-list{display:grid;gap:10px;overflow:auto}.quick-command-row{position:relative;display:grid;grid-template-columns:1fr;gap:8px;padding:10px 42px 10px 10px;border:1px solid #245c63;background:#0a1d22}.quick-command-row label{min-width:0;margin:0}.quick-command-row label span{display:block;margin-bottom:4px;color:var(--muted);font-size:7px}.quick-command-row input{min-width:0;min-height:32px;padding:6px;font-size:9px}.quick-command-row>.danger{position:absolute;top:10px;right:8px;width:28px;min-height:28px;padding:0}.quick-command-add{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin-top:9px;min-height:34px;color:var(--cyan)}.quick-command-add ha-icon{--mdc-icon-size:16px}
       .icon-picker-button{display:grid;grid-template-columns:26px minmax(0,1fr) 22px;align-items:center;gap:8px;width:100%;text-align:left}.icon-picker-button ha-icon{color:var(--cyan)}.icon-picker-button span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.icon-browser-modal{z-index:1100}.icon-browser-card{width:min(780px,100%)}.icon-browser-search{display:grid;grid-template-columns:24px minmax(0,1fr);align-items:center;gap:8px;margin:14px 16px 6px;padding:0 10px;border:1px solid var(--line);background:#061014}.icon-browser-search ha-icon{color:var(--cyan)}.icon-browser-search input{border:0;background:transparent}.icon-browser-count{padding:4px 16px 10px;color:var(--muted);font-size:9px}.mdi-icon-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(105px,1fr));gap:6px;max-height:55vh;overflow:auto;padding:0 16px 16px}.mdi-icon-option{display:grid;place-items:center;align-content:center;gap:6px;min-height:78px;padding:7px}.mdi-icon-option ha-icon{color:var(--cyan);--mdc-icon-size:28px}.mdi-icon-option span{width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px;text-align:center}
+      .editor-save-bar{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px;background:#0b2029;border:1px solid #347883;margin-bottom:16px}.editor-save-bar span{display:flex;flex-wrap:wrap;gap:6px}.editor-save-bar small{flex-basis:100%}.page-layout-options{margin:12px 0;padding:12px;border:1px solid var(--line)}.page-layout-options>summary{cursor:pointer;color:var(--cyan);padding:8px}.simple-panel-controls{display:flex;flex-wrap:wrap;align-items:end;gap:12px;padding:16px;margin:12px 0;background:#0b2029;border:1px solid #347883}.simple-panel-controls label{flex:1 1 150px;min-width:0;margin:0}.simple-panel-controls select{margin-top:6px}.simple-panel-controls p{flex-basis:100%;font-size:11px;color:var(--muted);line-height:1.5;margin:0}.panel-step-buttons,.card-order-buttons{display:flex;gap:6px}.panel-step-buttons button{min-width:42px;min-height:42px}.card-order-buttons{flex-wrap:wrap}.simple-panel-controls button:focus-visible,.simple-panel-controls select:focus-visible{outline:2px solid var(--cyan);outline-offset:3px}
       .home-sidebar-blueprint .slot-heading>span strong,.home-sidebar-blueprint .slot-heading>span small{display:block}.home-sidebar-blueprint .slot-heading>span small{margin-top:2px;color:var(--muted);font-size:7px}.sidebar-blueprint-list{display:grid;gap:7px}.sidebar-blueprint-row{display:grid;grid-template-columns:24px minmax(100px,1fr) repeat(4,30px);gap:5px;align-items:center;padding:6px;border:1px solid #245c63;background:#0a1d22}.sidebar-position{display:grid;place-items:center;min-height:30px;border:1px solid #267680;color:var(--cyan);font-size:9px}.sidebar-blueprint-row select{min-height:30px;padding:4px;font-size:9px}.sidebar-blueprint-row button{width:30px;min-height:30px;padding:0}.sidebar-blueprint-empty{display:grid;place-items:center;min-height:82px;border:1px dashed #28626a;color:var(--muted);font-size:9px;text-align:center}
-      :host{display:block;min-height:100vh;container-type:inline-size;background:#050b0e;color:#d8f7f7;font-family:"Share Tech Mono","IBM Plex Mono",monospace;--cyan:#45e8e8;--line:#1d6870;--panel:#0a1519;--muted:#77999d}*{box-sizing:border-box}main{min-height:100vh;background-image:linear-gradient(rgba(69,232,232,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(69,232,232,.035) 1px,transparent 1px);background-size:42px 42px;padding:28px}header{display:flex;align-items:end;justify-content:space-between;border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:18px}h1,h2,p{margin:0}h1{font-size:28px;font-weight:400;color:var(--cyan)}h2{font-size:13px;color:var(--cyan);margin:22px 0 10px}.eyebrow,label{display:block;color:var(--muted);font-size:10px;margin-bottom:6px}.workspace{display:grid;grid-template-columns:260px minmax(0,1fr);gap:18px}aside,.screen-card,.preview{background:rgba(10,21,25,.94);border:1px solid var(--line);padding:16px}select,input,button{font:inherit;color:#d8f7f7;background:#081115;border:1px solid var(--line);min-height:38px;padding:8px}select,input{width:100%}button{cursor:pointer}button:hover:not(:disabled){border-color:var(--cyan);color:var(--cyan)}button:disabled{opacity:.35;cursor:not-allowed}.primary{background:var(--cyan);color:#021012;border-color:var(--cyan)}.danger{color:#ff8181}.header-actions,.button-row,.profile-bar,.screen-head,.section-row{display:flex;gap:8px;align-items:end}.button-row{margin-top:8px}.button-row>*{flex:1}.notice{padding:10px 14px;border-left:3px solid var(--cyan);background:#0b1d21;margin-bottom:16px}.profile-bar{padding:14px;background:#071014;border:1px solid var(--line);margin-bottom:14px}.field{min-width:150px}.grow,.bindings{flex:1}.screen-card{margin-bottom:12px}.screen-head{padding-bottom:12px;border-bottom:1px solid #143c42}.index{font-size:22px;color:var(--cyan);align-self:center}.section-list{display:grid;gap:8px;margin:12px 0}.section-row{background:#071115;border-left:2px solid var(--cyan);padding:10px}.trace{width:14px;height:1px;background:var(--cyan);box-shadow:0 0 8px var(--cyan)}.icon{min-width:38px}.add{width:100%;border-style:dashed}.add.compact{width:auto}.action-count,small{font-size:10px;color:var(--muted)}.assignments p{color:var(--muted);font-size:11px}.display{display:grid;gap:8px;margin-bottom:12px}.display span{display:flex;flex-direction:column}.preview{margin-top:18px}.preview-stage{height:360px;margin-top:14px;padding:10px;display:grid;gap:8px;border:1px solid var(--line);background:#03090b}.preview-stage.radial_command_overview{grid-template-columns:1fr 1fr 1.6fr 1fr 1fr;grid-template-rows:1fr;grid-template-areas:"overview left_menu reactor right_menu media_events"}.preview-stage.security_camera_board{grid-template-columns:1fr 1.8fr 1fr;grid-template-rows:1fr 1fr;grid-template-areas:"status camera_primary controls" "events camera_grid controls"}.preview-stage.focused_control{grid-template-columns:1fr 1.7fr 1fr;grid-template-rows:1fr auto;grid-template-areas:"left_instrument core right_instrument" "footer footer footer"}.preview-slot{border:1px solid #267680;background:rgba(24,72,78,.35);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;min-width:0}.preview-slot span,.preview-slot small{font-size:9px;color:var(--muted)}.preview-slot strong{color:var(--cyan);font-size:11px;margin:5px}.slot-overview{grid-area:overview}.slot-left_menu{grid-area:left_menu}.slot-reactor{grid-area:reactor}.slot-right_menu{grid-area:right_menu}.slot-media_events{grid-area:media_events}.slot-status{grid-area:status}.slot-camera_primary{grid-area:camera_primary}.slot-camera_grid{grid-area:camera_grid}.slot-controls{grid-area:controls}.slot-events{grid-area:events}.slot-left_instrument{grid-area:left_instrument}.slot-core{grid-area:core}.slot-right_instrument{grid-area:right_instrument}.slot-footer{grid-area:footer}ha-selector{display:block;min-width:260px}@container(max-width:1100px){.section-row{flex-wrap:wrap}.section-row .field{min-width:calc(50% - 8px)}.section-row .bindings{min-width:100%}}@container(max-width:760px){main{padding:12px}.workspace{grid-template-columns:1fr}.profile-bar,.screen-head,.section-row{flex-wrap:wrap}.field,.bindings{min-width:100%}.preview-stage{height:280px;overflow:auto}.header-actions{align-self:start}}
+      :host{display:block;min-height:100vh;container-type:inline-size;background:#050b0e;color:#d8f7f7;font-family:"Share Tech Mono","IBM Plex Mono",monospace;--cyan:#45e8e8;--line:#1d6870;--panel:#0a1519;--muted:#77999d}*{box-sizing:border-box}main{min-height:100vh;background-image:linear-gradient(rgba(69,232,232,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(69,232,232,.035) 1px,transparent 1px);background-size:42px 42px;padding:28px}header{display:flex;align-items:end;justify-content:space-between;border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:18px}h1,h2,p{margin:0}h1{font-size:28px;font-weight:400;color:var(--cyan)}h2{font-size:13px;color:var(--cyan);margin:22px 0 10px}.eyebrow,label{display:block;color:var(--muted);font-size:10px;margin-bottom:6px}.workspace{display:grid;grid-template-columns:260px minmax(0,1fr);gap:18px}aside,.screen-card,.preview{background:rgba(10,21,25,.94);border:1px solid var(--line);padding:16px}select,input,button{font:inherit;color:#d8f7f7;background:#081115;border:1px solid var(--line);min-height:38px;padding:8px}select,input{width:100%}button{cursor:pointer}button:hover:not(:disabled){border-color:var(--cyan);color:var(--cyan)}button:disabled{opacity:.35;cursor:not-allowed}.primary{background:var(--cyan);color:#021012;border-color:var(--cyan)}.danger{color:#ff8181}.header-actions,.button-row,.profile-bar,.screen-head,.section-row{display:flex;gap:8px;align-items:end}.button-row{margin-top:8px}.button-row>*{flex:1}.notice{padding:10px 14px;border-left:3px solid var(--cyan);background:#0b1d21;margin-bottom:16px}.profile-bar{padding:14px;background:#071014;border:1px solid var(--line);margin-bottom:14px}.field{min-width:150px}.grow,.bindings{flex:1}.screen-card{margin-bottom:12px}.screen-head{padding-bottom:12px;border-bottom:1px solid #143c42}.index{font-size:22px;color:var(--cyan);align-self:center}.section-list{display:grid;gap:8px;margin:12px 0}.section-row{background:#071115;border-left:2px solid var(--cyan);padding:10px}.trace{width:14px;height:1px;background:var(--cyan);box-shadow:0 0 8px var(--cyan)}.icon{min-width:38px}.add{width:100%;border-style:dashed}.add.compact{width:auto}.action-count,small{font-size:10px;color:var(--muted)}.assignments p{color:var(--muted);font-size:11px}.display{display:grid;gap:8px;margin-bottom:12px}.display span{display:flex;flex-direction:column}.preview{margin-top:18px}.preview-stage{height:360px;margin-top:14px;padding:10px;display:grid;gap:8px;border:1px solid var(--line);background:#03090b}.preview-stage.radial_command_overview{grid-template-columns:17fr 19fr 28fr 19fr 20fr;grid-template-rows:1fr;grid-template-areas:"overview left_menu reactor right_menu media_events"}.preview-stage.security_camera_board{grid-template-columns:1fr 1.8fr 1fr;grid-template-rows:1fr 1fr;grid-template-areas:"status camera_primary controls" "events camera_grid controls"}.preview-stage.focused_control{grid-template-columns:1fr 1.7fr 1fr;grid-template-rows:1fr auto;grid-template-areas:"left_instrument core right_instrument" "footer footer footer"}.preview-slot{border:1px solid #267680;background:rgba(24,72,78,.35);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;min-width:0}.preview-slot span,.preview-slot small{font-size:9px;color:var(--muted)}.preview-slot strong{color:var(--cyan);font-size:11px;margin:5px}.slot-overview{grid-area:overview}.slot-left_menu{grid-area:left_menu}.slot-reactor{grid-area:reactor}.slot-right_menu{grid-area:right_menu}.slot-media_events{grid-area:media_events}.slot-status{grid-area:status}.slot-camera_primary{grid-area:camera_primary}.slot-camera_grid{grid-area:camera_grid}.slot-controls{grid-area:controls}.slot-events{grid-area:events}.slot-left_instrument{grid-area:left_instrument}.slot-core{grid-area:core}.slot-right_instrument{grid-area:right_instrument}.slot-footer{grid-area:footer}ha-selector{display:block;min-width:260px}@container(max-width:1100px){.section-row{flex-wrap:wrap}.section-row .field{min-width:calc(50% - 8px)}.section-row .bindings{min-width:100%}}@container(max-width:760px){main{padding:12px}.workspace{grid-template-columns:1fr}.profile-bar,.screen-head,.section-row{flex-wrap:wrap}.field,.bindings{min-width:100%}.preview-stage{height:280px;overflow:auto}.header-actions{align-self:start}}
       main{container-type:inline-size}.editor{min-width:0}ha-selector{width:100%;min-width:0}
       .profile-choices{display:grid;gap:6px}.profile-choice{display:grid;grid-template-columns:20px minmax(0,1fr);align-items:center;gap:7px;width:100%;min-height:36px;padding:7px 9px;text-align:left}.profile-choice ha-icon{color:var(--muted);--mdc-icon-size:17px}.profile-choice span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.profile-choice.selected{border-color:var(--cyan);background:#0b2024;color:var(--cyan)}.profile-choice.selected ha-icon{color:var(--cyan)}.profile-select-fallback{margin-top:8px}.profile-select-fallback summary{cursor:pointer;color:var(--muted);font-size:8px}.profile-select-fallback select{margin-top:6px}.dashboard-import{margin-top:22px;padding-top:2px;border-top:1px solid #143c42}.dashboard-import select{margin-bottom:8px}.dashboard-import button{width:100%}.section-block{background:#071115;border-left:2px solid var(--cyan);padding:10px}.section-block .section-row{background:transparent;border:0;padding:0}.selected-entities{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}.selected-entities span{max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:4px 7px;border:1px solid #267680;background:#0b2024;color:#bdeff0;font-size:10px}.selected-entities em,.actions p{color:var(--muted);font-size:10px;font-style:normal}.actions{margin-top:10px;padding-top:10px;border-top:1px solid #143c42}.actions-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px}.actions-head label{margin:0}.actions-head button{min-height:30px;padding:4px 8px}.action-row{display:grid;grid-template-columns:90px 140px minmax(220px,1fr) 38px;gap:8px;align-items:center;margin-top:7px}.action-row select,.action-row input{min-height:36px}.action-target{display:flex;gap:6px;min-width:0}.action-target>*{flex:1;min-width:0}@container(max-width:760px){.action-row{grid-template-columns:1fr 1fr 38px}.action-target{grid-column:1/3}.section-block .section-row .field{min-width:100%}}
       .layout-label{margin-top:16px}.layout-choices{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:7px 0 14px}.layout-choice{display:grid;grid-template-columns:82px 1fr;grid-template-rows:auto auto;text-align:left;gap:2px 10px;min-height:92px;align-items:center}.layout-choice.selected{border-color:var(--cyan);background:#0b2024;box-shadow:inset 0 0 0 1px var(--cyan)}.layout-choice strong{color:var(--cyan);font-size:12px}.layout-choice small{color:var(--muted);font-size:9px;line-height:1.35}.mini-layout{grid-row:1/3;display:grid;width:82px;height:62px;gap:3px}.mini-layout i{display:block;border:1px solid #267680;background:#10282d}.mini-layout.radial_command_overview,.mini-layout.security_camera_board{grid-template-columns:repeat(5,1fr)}.mini-layout.focused_control{grid-template-columns:1fr 1.4fr 1fr;grid-template-rows:1fr 12px}.mini-layout.focused_control .slot-footer{grid-column:1/4}.slot-editor,.slot-editor.radial_command_overview,.slot-editor.security_camera_board,.slot-editor.focused_control{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:10px;margin-top:10px}.slot-editor>.section-block,.slot-editor.focused_control>.slot-footer{grid-area:auto;grid-column:auto;grid-row:auto;min-width:0;border:1px solid var(--line);border-top:3px solid var(--cyan);padding:12px}.slot-heading{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:10px}.slot-heading strong{color:var(--cyan);font-size:11px}.slot-heading span{color:var(--muted);font-size:8px;text-align:right}.slot-editor .section-row{display:block}.slot-editor .section-kind{min-width:0;margin-bottom:9px}.slot-editor .bindings{min-width:0}.slot-editor .selected-entities{max-height:86px;overflow:auto}.slot-editor .selected-entities span{max-width:100%}.actions summary{cursor:pointer;color:var(--muted);font-size:9px}.actions-head{gap:10px;margin-top:8px}.actions-head span{color:var(--muted);font-size:9px}.actions-head button{flex:none}@container(max-width:900px){.layout-choices{grid-template-columns:1fr}.layout-choice{grid-template-columns:92px 1fr}}
@@ -1384,7 +2421,7 @@ class BiofectsButlerPanel extends HTMLElement {
       @container(max-width:700px){main{padding:12px}.workspace{grid-template-columns:1fr}.profile-bar,.screen-head{flex-wrap:wrap}.card-options{grid-template-columns:1fr}.toggle-option{justify-content:flex-start}}
       .attribute-summary{color:var(--cyan)!important}.attribute-picker{margin-top:14px;padding-top:12px;border-top:1px solid #17434a}.attribute-picker h3{margin:0;color:var(--cyan);font-size:11px}.attribute-picker>p{margin:4px 0 9px;color:var(--muted);font-size:9px}.attribute-options{display:grid;grid-template-columns:1fr 1fr;gap:6px;max-height:250px;overflow:auto}.attribute-option{display:grid!important;grid-template-columns:20px minmax(0,1fr);grid-template-rows:auto auto;gap:1px 7px;margin:0!important;padding:7px;border:1px solid #245c63;background:#071115}.attribute-option input{grid-row:1/3;width:16px;min-height:16px;margin:0;align-self:center}.attribute-option span{color:#d8f7f7;font-size:9px}.attribute-option small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px}
       .screen-tabs{display:flex;gap:6px;align-items:center;overflow-x:auto;padding:8px 0 12px}.screen-tab,.add-screen-tab{min-height:36px;white-space:nowrap}.screen-tab.selected{background:var(--cyan);border-color:var(--cyan);color:#021012}.add-screen-tab{width:38px;padding:0;font-size:20px;color:var(--cyan)}
-      .mini-layout.full_page{grid-template-columns:1fr}.screen-card{padding:14px}.canvas-toolbar{background:#071014;padding:10px;border:1px solid #143c42}.canvas-toolbar .field{max-width:440px}.layout-choices{margin-bottom:12px}.layout-choice{border-width:1px}.layout-choice.selected{box-shadow:inset 4px 0 0 var(--cyan)}
+      .mini-layout.full_page{grid-template-columns:1fr}.mini-layout.freeform_grid{grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(2,1fr)}.mini-layout.freeform_grid .slot-panel-a{grid-column:span 2}.screen-card{padding:14px}.canvas-toolbar{background:#071014;padding:10px;border:1px solid #143c42}.canvas-toolbar .field{max-width:440px}.layout-choices{margin-bottom:12px}.layout-choice{border-width:1px}.layout-choice.selected{box-shadow:inset 4px 0 0 var(--cyan)}
       .slot-editor>.section-block{display:flex;flex-direction:column}.slot-heading{min-height:44px;margin:0 0 8px;padding-bottom:7px;border-bottom:1px solid #17434a}.slot-heading label{min-width:0;flex:1;margin:0}.slot-heading label span{display:block;margin-bottom:3px;color:var(--muted);font-size:7px;text-align:left}.slot-heading label input{min-height:28px;padding:4px 6px;color:var(--cyan);font-size:10px}.region-add{width:28px;min-height:28px;padding:0;border-color:#267680;color:var(--cyan);font-size:18px}.panel-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:7px;margin:12px 0 4px;padding:9px;border:1px solid #143c42;background:#071014}.panel-toolbar strong{margin-right:4px;color:var(--cyan);font-size:9px}.panel-toolbar button{display:flex;align-items:center;gap:5px;min-height:32px;padding:5px 8px;font-size:8px}.panel-toolbar button ha-icon{--mdc-icon-size:15px}.panel-toolbar small{color:var(--muted);font-size:8px}.panel-controls{display:flex;gap:5px}.panel-controls button{min-height:28px;padding:3px 6px}.panel-height{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:7px}.panel-height.selected{border-color:var(--cyan);color:var(--cyan);background:#0b2024}.panel-height ha-icon,.panel-controls .icon ha-icon{--mdc-icon-size:15px}.panel-controls .icon{width:28px}.empty-panels{display:grid;place-items:center;grid-column:1/-1;min-height:220px;color:var(--muted);border:1px dashed #28626a}
       .entity-canvas{flex:1}.entity-card{grid-template-columns:17px 28px minmax(0,1fr) auto auto 30px;padding:7px;gap:7px}.entity-card ha-icon{--mdc-icon-size:22px}.entity-copy strong{font-size:10px}.tap-mode{color:#73b7bb;font-size:7px;border:1px solid #245c63;padding:3px 5px}.card-settings,.live-toggle{display:grid;place-items:center;width:30px;min-height:30px;padding:0}.card-settings ha-icon,.live-toggle ha-icon{--mdc-icon-size:17px}.live-toggle.is-on{color:#021012;background:var(--cyan);border-color:var(--cyan)}.drop-empty{width:100%;min-height:92px;border:1px dashed #28626a;background:transparent;color:var(--muted);display:grid;place-items:center;align-content:center;gap:7px}.drop-empty ha-icon{color:var(--cyan);--mdc-icon-size:28px}.slot-camera_primary .drop-empty{min-height:180px}.slot-reactor .drop-empty,.slot-core .drop-empty{border-radius:50%;width:min(180px,80%);aspect-ratio:1;justify-self:center;align-self:center;background:radial-gradient(circle,rgba(69,232,232,.12),transparent 62%)}
       .editor-modal{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:24px;background:rgba(0,6,8,.78);backdrop-filter:blur(4px)}.editor-modal-card{width:min(540px,100%);max-height:calc(100vh - 48px);overflow:auto;background:#09171b;border:1px solid var(--cyan);box-shadow:0 18px 70px rgba(0,0,0,.55)}.editor-modal-card>header{display:flex;align-items:center;padding:16px;margin:0;border-bottom:1px solid var(--line)}.editor-modal-card>header h2{font-size:17px;margin:2px 0 0}.editor-modal-card>header button{margin-left:auto;width:36px;min-height:36px;padding:0}.dialog-title{display:flex;align-items:center;gap:11px}.dialog-title>ha-icon{color:var(--cyan);--mdc-icon-size:30px}.dialog-copy{padding:14px 16px;color:var(--muted);font-size:11px}.editor-modal-card>[data-picker-selector]{display:block;padding:0 16px 18px}.dialog-fields{display:grid;gap:14px;padding:18px}.dialog-fields label{font-size:9px}.dialog-fields input,.dialog-fields select{margin-top:6px}.editor-modal-card>footer{display:flex;justify-content:space-between;gap:10px;padding:14px 18px;border-top:1px solid var(--line)}
@@ -1392,7 +2429,7 @@ class BiofectsButlerPanel extends HTMLElement {
       .recipe-config-field{display:block;min-width:0;margin:0}.recipe-field-heading{display:flex!important;align-items:center;justify-content:space-between;gap:6px;min-height:26px;margin-bottom:4px!important}.recipe-field-heading>span{margin:0!important}.recipe-field-heading button{display:flex;align-items:center;gap:3px;min-height:24px;padding:2px 5px;color:var(--cyan);font-size:7px}.recipe-field-heading button ha-icon{--mdc-icon-size:13px}
       .fixed-value{display:flex;align-items:center;min-height:38px;padding:8px 12px;border:1px solid var(--line);color:var(--cyan)}.home-mode-note{display:flex;align-items:center;gap:10px;margin:12px 0;padding:10px;border:1px solid #267680;background:#0a1d22}.home-mode-note ha-icon{color:var(--cyan)}.home-mode-note strong,.home-mode-note small{display:block}.home-mode-note strong{font-size:11px;color:var(--cyan)}.home-mode-note small{margin-top:3px;font-size:9px;color:var(--muted)}.page-render-settings{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:10px;margin:12px 0;padding:12px;border:1px solid #143c42;background:#071014}.scale-field label span{float:right;color:var(--cyan)}.scale-field input{padding:0}.ha-cards-preview{display:grid;place-items:center;align-content:center;gap:10px;min-height:440px;border:1px dashed #267680;background:rgba(2,10,13,.82);text-align:center}.ha-cards-preview ha-icon{color:var(--cyan);--mdc-icon-size:58px}.ha-cards-preview strong{color:var(--cyan);font-size:16px}.ha-cards-preview span{color:#d8f7f7;font-size:12px}.ha-cards-preview small{max-width:420px;color:var(--muted);font-size:10px}.page-link-card{display:grid;grid-template-columns:28px minmax(0,1fr) auto;align-items:center;gap:8px;width:100%;padding:9px;text-align:left;border-color:#267680;background:#0a1d22}.page-link-card ha-icon{color:var(--cyan);--mdc-icon-size:21px}.page-link-card span{min-width:0}.page-link-card strong,.page-link-card small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.page-link-card strong{color:#d8f7f7;font-size:10px}.page-link-card small{margin-top:2px;color:var(--muted);font-size:7px}.page-link-card em{color:var(--cyan);font-size:7px;font-style:normal}.entity-picker-search{display:grid;grid-template-columns:24px minmax(0,1fr);align-items:center;gap:8px;margin:0 16px 8px;padding:0 10px;border:1px solid var(--line);background:#061014}.entity-picker-search:focus-within{border-color:var(--cyan)}.entity-picker-search ha-icon{color:var(--cyan);--mdc-icon-size:20px}.entity-picker-search input{min-height:44px;padding:8px 0;border:0;background:transparent;outline:0}.entity-picker-summary{padding:0 16px 8px;color:var(--muted);font-size:9px}.entity-picker-list{display:grid;max-height:min(480px,55vh);overflow:auto;border-top:1px solid #143c42}.entity-picker-option{display:grid;grid-template-columns:28px minmax(0,1fr) auto;align-items:center;gap:10px;width:100%;min-height:54px;padding:8px 16px;border:0;border-bottom:1px solid #143c42;text-align:left}.entity-picker-option:hover{background:#0b2024}.entity-picker-option[hidden]{display:none}.entity-picker-option ha-icon{color:var(--cyan);--mdc-icon-size:23px}.entity-picker-option span{min-width:0}.entity-picker-option strong,.entity-picker-option small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.entity-picker-option strong{font-size:11px}.entity-picker-option small{margin-top:3px;color:var(--muted);font-size:9px}.entity-picker-option em{max-width:110px;overflow:hidden;text-overflow:ellipsis;color:#82c8cc;font-size:9px;font-style:normal;white-space:nowrap}.entity-picker-empty{padding:28px 16px;text-align:center;color:var(--muted);font-size:11px}.entity-picker-empty[hidden]{display:none}
       @container(max-width:700px){.entity-card{grid-template-columns:15px 26px minmax(0,1fr) auto 30px}.tap-mode{display:none}.editor-modal{padding:10px}.screen-tabs{position:sticky;top:0;z-index:5;background:#050b0e}.entity-picker-option{grid-template-columns:26px minmax(0,1fr)}.entity-picker-option em{display:none}.page-render-settings{grid-template-columns:1fr}.ha-cards-preview{min-height:280px}}
-      .preview-stage.radial_command_overview{grid-template-columns:1fr 1fr 1.6fr 1fr;grid-template-rows:1fr 1fr;grid-template-areas:"overview overview reactor media" "left_menu right_menu reactor events"}.preview-stage.radial_command_overview .slot-overview{grid-area:overview}.preview-stage.radial_command_overview .slot-left_menu{grid-area:left_menu}.preview-stage.radial_command_overview .slot-reactor{grid-area:reactor}.preview-stage.radial_command_overview .slot-right_menu{grid-area:right_menu}.preview-stage.radial_command_overview .slot-media{grid-area:media}.preview-stage.radial_command_overview .slot-events{grid-area:events}
+      .preview-stage.radial_command_overview{grid-template-columns:17fr 19fr 28fr 19fr 20fr;grid-template-rows:1fr 1fr;grid-template-areas:"overview left_menu reactor right_menu media" "overview left_menu reactor right_menu events"}.preview-stage.radial_command_overview .slot-overview{grid-area:overview}.preview-stage.radial_command_overview .slot-left_menu{grid-area:left_menu}.preview-stage.radial_command_overview .slot-reactor{grid-area:reactor}.preview-stage.radial_command_overview .slot-right_menu{grid-area:right_menu}.preview-stage.radial_command_overview .slot-media{grid-area:media}.preview-stage.radial_command_overview .slot-events{grid-area:events}
       .page-header{margin-bottom:12px}.task-tabs{display:flex;gap:6px;max-width:100%;overflow-x:auto;margin-bottom:12px;padding-bottom:2px;border-bottom:1px solid var(--line)}.task-tab{display:flex;align-items:center;gap:7px;min-width:120px;border-bottom:3px solid transparent}.task-tab ha-icon{--mdc-icon-size:18px}.task-tab.selected{color:#021012;background:var(--cyan);border-color:var(--cyan)}.profile-context{display:grid;grid-template-columns:minmax(220px,420px) 1fr auto;align-items:end;gap:12px;min-width:0;margin-bottom:16px;padding:10px 12px;border:1px solid var(--line);background:#071014}.profile-context label{min-width:0;margin:0}.profile-context select{margin-top:5px}.profile-context span{align-self:center;color:var(--muted);font-size:10px}.task-workspace{min-width:0;max-width:100%;overflow:hidden}.settings-page,.assignments{min-width:0;padding:18px;border:1px solid var(--line);background:rgba(10,21,25,.94)}.settings-heading{display:flex;align-items:end;justify-content:space-between;gap:20px;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid #143c42}.settings-heading h2{margin:3px 0 5px;font-size:19px}.settings-heading p{color:var(--muted);font-size:10px}.profiles-layout{display:grid;grid-template-columns:minmax(220px,320px) minmax(0,1fr);gap:18px;min-width:0}.profile-list,.profile-settings,.advanced-grid article{min-width:0;padding:14px;border:1px solid #143c42;background:#071014}.profile-settings{display:grid;grid-template-columns:repeat(3,minmax(160px,1fr));gap:12px;align-items:end}.profile-delete{grid-column:1/-1;justify-self:start}.advanced-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;min-width:0}.advanced-grid article h2{margin:0 0 6px}.advanced-grid article p{min-height:32px;margin-bottom:12px;color:var(--muted);font-size:10px}.advanced-grid article>button{width:100%;margin-top:8px}.screen-workspace{display:grid;grid-template-columns:190px minmax(0,1fr);gap:14px;min-width:0}.screen-list,.screens,.screen-card{min-width:0;max-width:100%}.screen-list{align-self:start;padding:12px;border:1px solid var(--line);background:rgba(10,21,25,.94)}.screen-list-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}.screen-list-heading label{margin:0}.screen-list .screen-tab{display:block;width:100%;margin-bottom:6px;text-align:left}.panel-picker{min-width:0;margin:12px 0;padding:10px;border:1px solid #143c42;background:#071014}.panel-picker-heading{display:flex;align-items:baseline;gap:9px;margin-bottom:8px}.panel-picker-heading strong{color:var(--cyan);font-size:9px}.panel-picker-heading small{color:var(--muted);font-size:8px}.panel-picker-list{display:flex;gap:7px;max-width:100%;overflow-x:auto;padding-bottom:2px}.panel-picker-item{display:grid;grid-template-columns:22px minmax(100px,1fr);grid-template-rows:auto auto;gap:2px 7px;min-width:150px;text-align:left}.panel-picker-item ha-icon{grid-row:1/3;align-self:center;color:var(--cyan);--mdc-icon-size:19px}.panel-picker-item span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.panel-picker-item small{color:var(--muted);font-size:7px}.panel-picker-item.selected{border-color:var(--cyan);background:#0b2024;color:var(--cyan)}.add-panel{min-width:0;margin-bottom:10px}.add-panel summary{cursor:pointer;color:var(--cyan);font-size:9px}.add-panel .panel-toolbar{margin-top:7px}.focused-panel-editor{min-width:0;min-height:420px;overflow:hidden;padding:12px;border:1px solid #143c42;background:rgba(2,10,13,.82)}.focused-panel-editor>.section-block{min-width:0;min-height:390px;border:1px solid var(--line);border-top:3px solid var(--cyan);padding:14px;background:rgba(7,17,21,.96)}.focused-panel-editor .slot-heading{align-items:end}.focused-panel-editor .entity-canvas{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px}.focused-panel-editor .drop-empty{grid-column:1/-1}.focused-panel-editor .quick-command-list{max-height:none}.focused-panel-editor .selected-entities{max-height:none}.backend-config{margin:0;padding:18px;border:1px solid var(--line);background:rgba(10,21,25,.94)}.backend-config h2{margin-top:0}
       @container(max-width:900px){.profiles-layout,.screen-workspace,.advanced-grid{grid-template-columns:minmax(0,1fr)}.screen-list{display:flex;gap:6px;width:100%;overflow-x:auto}.screen-list-heading{min-width:90px}.screen-list .screen-tab{min-width:130px;margin:0}.profile-settings{grid-template-columns:1fr}.profile-context{grid-template-columns:minmax(0,1fr) auto}.profile-context span{display:none}}
       @container(max-width:600px){.task-tab{min-width:auto;flex:1;justify-content:center}.task-tab ha-icon{display:none}.profile-context{grid-template-columns:1fr}.focused-panel-editor{padding:6px}.focused-panel-editor .entity-canvas{grid-template-columns:1fr}.settings-heading{align-items:stretch;flex-direction:column}.settings-heading .button-row{width:100%}}
@@ -1400,6 +2437,12 @@ class BiofectsButlerPanel extends HTMLElement {
       main,div,article,section,aside,details,summary,span,strong,small,em,label{font-size:inherit}select,input,textarea,button,ha-selector{font:inherit;color:inherit}.screen-font-scale{width:130px;min-width:130px}.screen-font-scale input{font-size:var(--font-sm)}
       .editor-modal{font-size:var(--font-md)}.editor-modal-card>header h2{font-size:var(--font-lg)}.editor-modal-card>header button{width:40px;min-height:40px}.dialog-copy{font-size:var(--font-md);line-height:1.5}.dialog-fields label{font-size:var(--font-sm)}.dialog-fields input,.dialog-fields select{font-size:var(--font-md)}.entity-picker-option strong{font-size:var(--font-md)}.entity-picker-option small,.entity-picker-option em,.attribute-option small{font-size:var(--font-sm)}
       .quick-command-panel>summary{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:42px;padding:8px 10px;border:1px solid #245c63;color:var(--cyan);cursor:pointer;touch-action:manipulation}.quick-command-panel>summary small{color:var(--muted);font-size:var(--font-xs)}.quick-command-panel[open]>summary{margin-bottom:10px}.quick-command-panel:not([open]){min-height:42px}
+      .profile-context-picker{min-width:0}.profile-context-picker>label{margin:0 0 5px}.profile-context-choices{display:flex;flex-wrap:wrap;gap:6px}.profile-context-choices .profile-choice{width:auto;min-width:150px}
+      .layout-preview{margin:12px 0;padding:10px;border:1px solid #143c42;background:#071014}.layout-preview .preview-stage{height:220px;margin-top:8px}.layout-preview .preview-slot{padding:5px;cursor:grab;touch-action:none}.layout-preview .preview-slot:active{cursor:grabbing}.layout-preview .preview-slot.selected{border-color:var(--cyan);background:rgba(69,232,232,.16);box-shadow:inset 0 0 0 1px var(--cyan)}.layout-preview .preview-slot.dragging{opacity:.45}.layout-preview .preview-slot span{font-size:8px}.layout-preview .preview-slot strong{font-size:9px}.layout-preview .preview-slot small{font-size:7px}.preview-stage.interactive-preview.freeform_grid{grid-template-columns:repeat(4,minmax(0,1fr));grid-auto-rows:minmax(56px,1fr);grid-template-areas:none}.preview-stage.interactive-preview.freeform_grid .preview-slot{grid-area:auto}.preview-stage.interactive-preview.full_page{grid-template-columns:1fr;grid-template-rows:1fr}
+
+      .grid-designer{padding:16px;margin:14px 0;border:1px solid var(--line);background:#061015}.canvas-heading{display:flex;gap:16px;justify-content:space-between;align-items:start}.canvas-heading strong{color:var(--cyan)}.canvas-heading p,.canvas-hint{font-size:11px;line-height:1.6;color:var(--muted);max-width:780px}.canvas-settings{display:flex;flex-wrap:wrap;gap:10px;align-items:end;margin:16px 0}.canvas-settings label{max-width:160px;flex:1;min-width:110px}.canvas-settings input{margin-top:6px}.viewport-choices{display:flex;gap:4px}.viewport-choices .selected{background:var(--cyan);color:#021012}.canvas-presets{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px}.canvas-presets>span{grid-column:1/-1;font-size:10px;color:var(--muted)}.canvas-presets>button{display:flex;flex-direction:column;align-items:start;text-align:left;gap:8px;padding:12px}.canvas-presets strong{color:var(--cyan);font-size:12px}.canvas-presets small{font-size:10px;line-height:1.4}.preset-sketch{display:grid;width:100%;height:58px;gap:3px;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(2,1fr)}.preset-sketch i{background:#14343e;border:1px solid #308c9e}.preset-hero i:first-child,.preset-mosaic i:first-child{grid-column:span 2;grid-row:span 2}.preset-hero i:nth-child(2){grid-column:span 2}.preset-briefing i:first-child{grid-column:1/-1}.preset-briefing{grid-template-columns:repeat(3,1fr)}.preset-wall{grid-template-columns:repeat(2,1fr)}.preset-whole_home{grid-template-columns:5fr 3fr 4fr;grid-template-rows:12px 1fr}.preset-whole_home i:first-child{grid-column:1/-1}.canvas-scroll{max-height:580px;overflow:auto;border:1px solid #17434a;background:#03080d;padding:8px;margin:12px auto 0}.canvas-scroll.viewport-tablet{max-width:800px}.canvas-scroll.viewport-phone{max-width:360px}.advanced-canvas{display:grid;position:relative;isolation:isolate}.canvas-cell{padding:0;min-height:0;min-width:0;border:1px dashed #17343d;background:#071119;color:#38606d;font-size:8px;z-index:0}.canvas-cell:hover:not(:disabled){background:#123b46}.canvas-panel{position:relative;min-width:0;min-height:0;overflow:hidden;display:flex;flex-direction:column;gap:6px;align-items:start;justify-content:center;padding:10px;border:1px solid #387e91;border-left:3px solid var(--cyan);background:linear-gradient(135deg,#102b38,#08121e);z-index:1;text-align:left;cursor:grab}.canvas-panel.selected{border-color:var(--cyan);box-shadow:inset 0 0 0 1px var(--cyan)}.canvas-panel strong{font-size:10px;color:var(--cyan)}.canvas-panel span{font-size:12px}.canvas-panel small{font-size:9px}.canvas-panel.dragging{opacity:.4}.canvas-resize{position:absolute;bottom:0;right:0;display:grid;place-items:center;width:28px;height:28px;background:#12313e;color:var(--cyan);cursor:nwse-resize;touch-action:none;user-select:none}.panel-dimensions{display:flex;flex-wrap:wrap;gap:8px}.panel-dimension{min-width:110px;flex:1}@container(max-width:800px){.canvas-presets{grid-template-columns:repeat(2,minmax(0,1fr))}.canvas-heading{flex-direction:column}}@container(max-width:480px){.canvas-presets{grid-template-columns:1fr}.grid-designer{padding:8px}}
+
+      .visual-workspace{font-family:system-ui,sans-serif;font-size:13px;display:grid;grid-template-columns:215px minmax(0,1fr) 235px;gap:12px;align-items:start}.visual-stage{min-width:0}.visual-library,.visual-inspector{padding:14px;border:1px solid var(--line);background:#0a1519;position:sticky;top:10px;max-height:85vh;overflow:auto}.visual-library h2,.visual-inspector h2{margin:0 0 12px}.visual-library p,.visual-inspector p{font-size:11px;line-height:1.5;color:var(--muted)}.visual-library label,.visual-inspector label{margin:14px 0 0}.visual-library input,.visual-inspector input,.visual-inspector select{margin-top:5px;min-width:0}.visual-inspector>button{margin-top:10px;width:100%}.visual-panel-library{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin:12px 0}.visual-panel-library button{font-size:10px;padding:6px;cursor:grab}.visual-library-entities{display:grid;gap:5px;margin-top:10px}.visual-library-entities>button{display:flex;align-items:center;gap:6px;text-align:left;padding:7px;min-width:0;cursor:grab}.visual-library-entities button span{min-width:0;flex:1}.visual-library-entities strong,.visual-library-entities small{display:block;overflow:hidden;text-overflow:ellipsis;font-size:10px}.visual-library-entities small{font-size:9px;color:var(--muted)}.visual-library-entities ha-icon{--mdc-icon-size:18px;color:var(--cyan)}.canvas-panel{display:block;padding:0;overflow:auto;cursor:default}.visual-panel-header{display:flex;align-items:center;justify-content:space-between;gap:6px;margin:0;padding:8px;border-bottom:1px solid var(--line);cursor:grab}.visual-panel-header>span{min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:11px}.visual-panel-header>button{min-height:24px;padding:2px 6px}.visual-panel-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;padding:8px 8px 25px}.visual-entity-card{display:flex;align-items:center;gap:6px;min-width:0;min-height:48px;padding:7px;text-align:left;background:#122735;border:1px solid #285b6a;cursor:grab}.visual-entity-card span{min-width:0;flex:1}.visual-entity-card strong,.visual-entity-card small{display:block;overflow:hidden;text-overflow:ellipsis;font-size:10px}.visual-entity-card em{font-size:9px;color:var(--cyan);font-style:normal}.visual-entity-card.is-tile{flex-wrap:wrap;border-radius:8px}.visual-entity-card.is-tile em{width:100%;text-align:right}.visual-design-preview{grid-column:1/-1;padding:10px;text-align:center;font-size:15px;white-space:pre-wrap;overflow-wrap:anywhere}.visual-design-preview.design-heading{font-size:24px;font-weight:600;color:var(--cyan)}.visual-design-preview img{width:100%;height:120px;object-fit:contain}.visual-inspector textarea{min-height:80px;width:100%;margin-top:5px}.visual-entity-card.selected{outline:2px solid var(--cyan)}.visual-entity-card ha-icon{--mdc-icon-size:18px;color:var(--cyan)}.visual-add-card{grid-column:1/-1;min-height:62px;border-style:dashed;font-size:10px}.visual-layout-tools{display:flex;flex-wrap:wrap;gap:10px;align-items:start;margin:10px 0}.canvas-options{flex:1;min-width:0}.canvas-options>summary,.visual-advanced>summary{padding:10px;cursor:pointer;border:1px solid var(--line)}.visual-library label,.visual-inspector label{font-size:12px}.visual-inspector input,.visual-inspector select{font-size:12px}.visual-entity-card strong{font-size:12px}.visual-workspace .grid-designer{margin:0;padding:12px}.visual-workspace .canvas-presets{grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}.visual-workspace .canvas-presets small{display:none}.visual-workspace .canvas-heading{flex-direction:column}.visual-workspace .canvas-scroll{max-height:680px}@container(max-width:1200px){.visual-workspace{grid-template-columns:185px minmax(0,1fr)}.visual-inspector{position:static;grid-column:1/-1;max-height:none;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.visual-inspector h2,.visual-inspector>p{grid-column:1/-1}}@container(max-width:700px){.visual-workspace{grid-template-columns:minmax(0,1fr)}.visual-library{position:static;max-height:350px}.visual-inspector{grid-template-columns:1fr}.visual-library-entities{grid-template-columns:repeat(2,minmax(0,1fr))}}
     `;
   }
 }

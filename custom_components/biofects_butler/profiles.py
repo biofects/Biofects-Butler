@@ -24,12 +24,14 @@ COMPOSITION_SLOTS = {
         {"left_instrument", "core", "right_instrument", "footer"}
     ),
     "full_page": frozenset({"full_page"}),
+    "freeform_grid": frozenset(),
 }
 SECTION_TYPES = frozenset(
     {
         "status_overview",
         "orbital_menu",
         "entity_controls",
+        "form",
         "security",
         "climate",
         "cameras",
@@ -40,6 +42,10 @@ SECTION_TYPES = frozenset(
         "quick_commands",
         "calendar_form",
         "recipe_browser",
+        "assistant",
+        "heading",
+        "text",
+        "image",
     }
 )
 BINDING_KINDS = frozenset({"entity", "device", "area"})
@@ -50,9 +56,19 @@ ACTION_GESTURES = frozenset({"tap", "hold"})
 PANEL_HEIGHTS = frozenset({"standard", "full_height"})
 POPUP_STYLES = frozenset({"standard", "projector"})
 GRAPH_TYPES = frozenset({"auto", "line", "bars", "gauge", "none"})
+DISPLAY_MODES = frozenset({"row", "tile"})
+CARD_SHAPES = frozenset({"cut", "square", "rounded"})
 CALENDAR_INITIAL_VIEWS = frozenset({"dayGridMonth", "listWeek"})
 WEATHER_FORECAST_TYPES = frozenset({"daily", "hourly", "twice_daily"})
-THEMES = frozenset({"butler_neon", "holographic_interface", "biofects_hud"})
+THEMES = frozenset({"pickle_rick", "futurama_bender", "hal_9000", "butler_neon", "holographic_interface", "violet_hologram", "biofects_hud", "companion", "butler", "simpsons_homer", "simpsons_marge", "simpsons_bart", "simpsons_lisa", "simpsons_maggie"})
+THEMES = THEMES | frozenset(
+    f"simpsons_{character}__{background}"
+    for character in ("homer", "marge", "bart", "lisa", "maggie")
+    for background in ("house", "kwik_e_mart")
+)
+
+THEMES = THEMES | frozenset(f"futurama_bender__{background}" for background in ("planet_express", "new_new_york", "robot_bar"))
+THEMES = THEMES | frozenset(f"pickle_rick__{background}" for background in ("garage", "portal_world", "sewer_lab"))
 
 _SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _ENTITY_ID_PATTERN = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
@@ -80,6 +96,11 @@ class ProfileBinding:
     display_attributes: tuple[str, ...] = ()
     graph_type: str = "auto"
     role: str | None = None
+    group: str | None = None
+    display_mode: str = "row"
+    card_width: int = 1
+    card_height: int = 1
+    card_shape: str = "cut"
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +117,7 @@ class ProfileAction:
     icon: str | None = None
     icon_height: int | None = None
     role: str | None = None
+    source_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +143,10 @@ class ProfileSection:
     projection_origin: int = 12
     projection_strength: int = 13
     default_image: str | None = None
+    column_span: int = 2
+    row_span: int = 1
+    grid_column: int = 0
+    grid_row: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +158,11 @@ class ProfileScreen:
     composition: str
     sections: tuple[ProfileSection, ...]
     font_scale: int = 100
+    command_layout: str = "theme_default"
+    grid_columns: int = 4
+    grid_row_height: int = 240
+    grid_gap: int = 10
+    show_header: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +198,13 @@ def _screen_as_dict(screen: ProfileScreen) -> dict[str, Any]:
         "composition": screen.composition,
         "sections": [_section_as_dict(section) for section in screen.sections],
     }
+    for field, default in (("grid_columns", 4), ("grid_row_height", 240), ("grid_gap", 10)):
+        if getattr(screen, field) != default:
+            data[field] = getattr(screen, field)
+    if not screen.show_header:
+        data["show_header"] = False
+    if screen.command_layout != "theme_default":
+        data["command_layout"] = screen.command_layout
     if screen.font_scale != 100:
         data["font_scale"] = screen.font_scale
     return data
@@ -270,6 +308,10 @@ def _ensure_primary_home(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     existing_home = screens.pop(home_index) if home_index is not None else {}
     if existing_home:
         _parse_screen(existing_home, "profile.screens[home]")
+        if existing_home.get("composition") == "freeform_grid":
+            screens.insert(0, existing_home)
+            value["default_screen_id"] = "home"
+            return value
     existing_sections = {
         section.get("slot"): section
         for section in existing_home.get("sections", [])
@@ -327,9 +369,11 @@ def _ensure_primary_home(payload: Mapping[str, Any]) -> Mapping[str, Any]:
         0,
         {
             "screen_id": "home",
-            "title": "Home",
+            "title": existing_home.get("title", "Home"),
             "composition": "radial_command_overview",
             "sections": home_sections,
+            **({"show_header": existing_home["show_header"]} if "show_header" in existing_home else {}),
+            **({"command_layout": existing_home["command_layout"]} if "command_layout" in existing_home else {}),
         },
     )
     value["default_screen_id"] = "home"
@@ -395,8 +439,10 @@ def _parse_screen(value: Any, path: str) -> ProfileScreen:
     data = _mapping(value, path)
     required = {"screen_id", "title", "composition", "sections"}
     # Accept legacy card-host settings so existing profiles migrate back to native pages.
-    optional = {"ha_dashboard_path", "ha_view_path", "ha_card_scale", "font_scale"}
+    optional = {"ha_dashboard_path", "ha_view_path", "ha_card_scale", "font_scale", "command_layout", "grid_columns", "grid_row_height", "grid_gap", "show_header"}
     _keys(data, required, optional, path)
+    if not isinstance(data.get("show_header", True), bool):
+        raise ProfileValidationError(f"{path}.show_header must be a boolean")
     composition = _choice(data["composition"], COMPOSITION_SLOTS, f"{path}.composition")
     sections_value = _list(data["sections"], f"{path}.sections", maximum=20)
     sections = tuple(
@@ -410,6 +456,11 @@ def _parse_screen(value: Any, path: str) -> ProfileScreen:
         title=_text(data["title"], f"{path}.title", maximum=80),
         composition=composition,
         sections=sections,
+        show_header=data.get("show_header", True),
+        grid_columns=_integer_range(data.get("grid_columns", 4), 1, 12, f"{path}.grid_columns"),
+        grid_row_height=_integer_range(data.get("grid_row_height", 240), 80, 400, f"{path}.grid_row_height"),
+        grid_gap=_integer_range(data.get("grid_gap", 10), 0, 32, f"{path}.grid_gap"),
+        command_layout=_choice(data.get("command_layout", "theme_default"), {"theme_default", "console", "orbital", "observatory", "wings", "companion"}, f"{path}.command_layout"),
         font_scale=_integer_range(data.get("font_scale", 100), 75, 175, f"{path}.font_scale"),
     )
 
@@ -417,9 +468,9 @@ def _parse_screen(value: Any, path: str) -> ProfileScreen:
 def _parse_section(value: Any, composition: str, path: str) -> ProfileSection:
     data = _mapping(value, path)
     required = {"section_id", "type", "slot"}
-    optional = {"title", "secondary_title", "panel_height", "bindings", "actions", "initial_view", "forecast_type", "popup_style", "popup_width", "popup_max_width", "popup_max_height", "content_scale", "projection_color", "projection_origin", "projection_strength", "default_image"}
+    optional = {"title", "secondary_title", "panel_height", "bindings", "actions", "initial_view", "forecast_type", "popup_style", "popup_width", "popup_max_width", "popup_max_height", "content_scale", "projection_color", "projection_origin", "projection_strength", "default_image", "column_span", "row_span", "grid_column", "grid_row"}
     _keys(data, required, optional, path)
-    slot = _choice(data["slot"], COMPOSITION_SLOTS[composition], f"{path}.slot")
+    slot = _slug(data["slot"], f"{path}.slot") if composition == "freeform_grid" else _choice(data["slot"], COMPOSITION_SLOTS[composition], f"{path}.slot")
     bindings_value = _list(data.get("bindings", []), f"{path}.bindings", maximum=100)
     actions_value = _list(data.get("actions", []), f"{path}.actions", maximum=20)
     return ProfileSection(
@@ -462,12 +513,16 @@ def _parse_section(value: Any, composition: str, path: str) -> ProfileSection:
             if data.get("default_image") is not None
             else None
         ),
+        grid_column=_integer_range(data.get("grid_column", 0), 0, 12, f"{path}.grid_column"),
+        grid_row=_integer_range(data.get("grid_row", 0), 0, 40, f"{path}.grid_row"),
+        column_span=_integer_range(data.get("column_span", 2), 1, 12, f"{path}.column_span"),
+        row_span=_integer_range(data.get("row_span", 1), 1, 8, f"{path}.row_span"),
     )
 
 
 def _parse_binding(value: Any, path: str) -> ProfileBinding:
     data = _mapping(value, path)
-    _keys(data, {"kind", "target_id"}, {"entity_ids", "name", "icon", "display_attributes", "graph_type", "role"}, path)
+    _keys(data, {"kind", "target_id"}, {"entity_ids", "name", "icon", "display_attributes", "graph_type", "role", "group", "display_mode", "card_width", "card_height", "card_shape"}, path)
     kind = _choice(data["kind"], BINDING_KINDS, f"{path}.kind")
     target_id = _text(data["target_id"], f"{path}.target_id", maximum=255)
     if kind == "entity" and not _ENTITY_ID_PATTERN.fullmatch(target_id):
@@ -504,6 +559,8 @@ def _parse_binding(value: Any, path: str) -> ProfileBinding:
     _require_unique(display_attributes, f"{path}.display_attributes")
     graph_type = _choice(data.get("graph_type", "auto"), GRAPH_TYPES, f"{path}.graph_type")
     role = _slug(data["role"], f"{path}.role") if data.get("role") is not None else None
+    group = _text(data["group"], f"{path}.group", maximum=100) if data.get("group") is not None else None
+    display_mode = _choice(data.get("display_mode", "row"), DISPLAY_MODES, f"{path}.display_mode")
     return ProfileBinding(
         kind=kind,
         target_id=target_id,
@@ -513,17 +570,23 @@ def _parse_binding(value: Any, path: str) -> ProfileBinding:
         display_attributes=display_attributes,
         graph_type=graph_type,
         role=role,
+        group=group,
+        display_mode=display_mode,
+        card_width=_integer_range(data.get("card_width", 1), 1, 4, f"{path}.card_width"),
+        card_height=_integer_range(data.get("card_height", 1), 1, 2, f"{path}.card_height"),
+        card_shape=_choice(data.get("card_shape", "cut"), CARD_SHAPES, f"{path}.card_shape"),
     )
 
 
 def _parse_action(value: Any, path: str) -> ProfileAction:
     data = _mapping(value, path)
     required = {"gesture", "type"}
-    optional = {"target_id", "domain", "service", "data", "name", "icon", "icon_height", "color", "active_color", "role", "active_states"}
+    optional = {"target_id", "source_id", "domain", "service", "data", "name", "icon", "icon_height", "color", "active_color", "role", "active_states"}
     _keys(data, required, optional, path)
     gesture = _choice(data["gesture"], ACTION_GESTURES, f"{path}.gesture")
     action_type = _choice(data["type"], ACTION_TYPES, f"{path}.type")
     target_id = data.get("target_id")
+    source_id = data.get("source_id")
     domain = data.get("domain")
     service = data.get("service")
     action_data = data.get("data")
@@ -562,6 +625,8 @@ def _parse_action(value: Any, path: str) -> ProfileAction:
         service = _service_part(service, f"{path}.service")
         if target_id is not None:
             target_id = _entity_id(target_id, f"{path}.target_id")
+        if source_id is not None:
+            source_id = _entity_id(source_id, f"{path}.source_id")
         if action_data is not None:
             action_data = _json_mapping(action_data, f"{path}.data")
 
@@ -576,6 +641,7 @@ def _parse_action(value: Any, path: str) -> ProfileAction:
         icon=icon,
         icon_height=icon_height,
         role=role,
+        source_id=source_id,
     )
 
 
@@ -621,6 +687,11 @@ def _section_as_dict(section: ProfileSection) -> dict[str, Any]:
                 **({"display_attributes": list(binding.display_attributes)} if binding.display_attributes else {}),
                 **({"graph_type": binding.graph_type} if binding.graph_type != "auto" else {}),
                 **({"role": binding.role} if binding.role is not None else {}),
+                **({"group": binding.group} if binding.group is not None else {}),
+                **({"display_mode": binding.display_mode} if binding.display_mode != "row" else {}),
+                **({"card_width": binding.card_width} if binding.card_width != 1 else {}),
+                **({"card_height": binding.card_height} if binding.card_height != 1 else {}),
+                **({"card_shape": binding.card_shape} if binding.card_shape != "cut" else {}),
             }
             for binding in section.bindings
         ]
@@ -628,6 +699,14 @@ def _section_as_dict(section: ProfileSection) -> dict[str, Any]:
         data["actions"] = [_action_as_dict(action) for action in section.actions]
     if section.default_image is not None:
         data["default_image"] = section.default_image
+    if section.grid_column:
+        data["grid_column"] = section.grid_column
+    if section.grid_row:
+        data["grid_row"] = section.grid_row
+    if section.column_span != 2:
+        data["column_span"] = section.column_span
+    if section.row_span != 1:
+        data["row_span"] = section.row_span
     if section.initial_view != "dayGridMonth":
         data["initial_view"] = section.initial_view
     if section.forecast_type != "daily":
@@ -651,6 +730,7 @@ def _action_as_dict(action: ProfileAction) -> dict[str, Any]:
     data: dict[str, Any] = {"gesture": action.gesture, "type": action.action_type}
     for key, value in (
         ("target_id", action.target_id),
+        ("source_id", action.source_id),
         ("domain", action.domain),
         ("service", action.service),
         ("data", action.data),

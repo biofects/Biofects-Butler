@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, replace
 import logging
 import re
@@ -27,7 +27,7 @@ from .profiles import (
 
 _DISPLAY_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,127}$")
 VIEWPORT_CLASSES = frozenset({"compact", "medium", "expanded"})
-DISPLAY_EDITIONS = frozenset({"free", "paid"})
+_DISPLAY_EDITION_PRIORITY = {"free": 0, "paid": 1, "unified": 2}
 MAX_FREE_DISPLAYS = 2
 
 _LOGGER = logging.getLogger(__name__)
@@ -83,6 +83,11 @@ class DisplayRegistration:
     edition: str = "free"
     device_key: str | None = None
     previous_display_id: str | None = None
+
+    @property
+    def supports_aurora(self) -> bool:
+        """Return whether the client can render Biofects Aurora."""
+        return self.edition != "free"
 
     def as_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible registration payload."""
@@ -180,25 +185,23 @@ class DashboardProfileStore:
                 except (ProfileValidationError, TypeError):
                     recovered = True
                     continue
-                physical_match = next(
-                    (
-                        registered
-                        for registered in self._displays.values()
-                        if registered.name == display.name
-                        and registered.model == display.model
-                        and registered.viewport_class == display.viewport_class
-                    ),
-                    None,
-                )
+                matches = _display_matches(self._displays.values(), display)
+                physical_match = matches[0] if matches else None
                 if physical_match is None:
                     self._displays[display.display_id] = display
-                elif display.edition == "paid" and physical_match.edition != "paid":
+                elif _DISPLAY_EDITION_PRIORITY[display.edition] > (
+                    _DISPLAY_EDITION_PRIORITY[physical_match.edition]
+                ):
                     del self._displays[physical_match.display_id]
                     self._displays[display.display_id] = display
+                    for alias, canonical in display_aliases.items():
+                        if canonical == physical_match.display_id:
+                            display_aliases[alias] = display.display_id
                     display_aliases[physical_match.display_id] = display.display_id
                     recovered = True
                 else:
-                    display_aliases[display.display_id] = physical_match.display_id
+                    if physical_match.display_id != display.display_id:
+                        display_aliases[display.display_id] = physical_match.display_id
                     recovered = True
         elif displays is not None:
             recovered = True
@@ -230,10 +233,10 @@ class DashboardProfileStore:
                     valid_themes[canonical_id] = (
                     "biofects_hud"
                     if theme == "robot_butler"
-                    and self._displays[canonical_id].edition == "paid"
+                    and self._displays[canonical_id].supports_aurora
                     else "butler_neon"
                     if theme in {"robot_butler", "biofects_hud"}
-                    and self._displays[canonical_id].edition != "paid"
+                    and not self._displays[canonical_id].supports_aurora
                     else theme
                 )
             self._display_themes = valid_themes
@@ -303,61 +306,46 @@ class DashboardProfileStore:
         """Validate and persist renderer capabilities for one display."""
         display = parse_display_registration(payload)
         async with self._mutation_lock:
-            physical_matches = [
-                registered
-                for registered in self._displays.values()
-                if registered.display_id != display.display_id
-                and registered.name == display.name
-                and registered.model == display.model
-                and registered.viewport_class == display.viewport_class
-            ]
-            paid_match = next(
-                (registered for registered in physical_matches if registered.edition == "paid"),
-                None,
+            matches = _display_matches(self._displays.values(), display)
+            preferred = max(
+                matches,
+                key=lambda registered: (
+                    _DISPLAY_EDITION_PRIORITY[registered.edition],
+                    registered.display_id == display.display_id,
+                    registered.display_id == display.previous_display_id,
+                    display.device_key is not None
+                    and registered.device_key == display.device_key,
+                ),
+                default=None,
             )
-            if paid_match is not None and display.edition != "paid":
-                display = paid_match
-            if display.device_key is None:
-                keyed_match = next(
-                    (
-                        registered
-                        for registered in self._displays.values()
-                        if registered.device_key is not None
-                        and registered.name == display.name
-                        and registered.model == display.model
-                        and registered.viewport_class == display.viewport_class
-                    ),
-                    None,
-                )
-                if keyed_match is not None:
+            if preferred is not None:
+                if _DISPLAY_EDITION_PRIORITY[preferred.edition] > _DISPLAY_EDITION_PRIORITY[
+                    display.edition
+                ]:
+                    # An older client can reconnect without replacing the canonical row.
+                    display = preferred
+                elif display.edition == "unified":
+                    # Keep saved assignments stable across APK packages and signing keys.
                     display = replace(
                         display,
-                        display_id=keyed_match.display_id,
-                        device_key=keyed_match.device_key,
+                        display_id=preferred.display_id,
+                        device_key=display.device_key or preferred.device_key,
                     )
+                elif display.device_key is None:
+                    keyed_match = next(
+                        (registered for registered in matches if registered.device_key),
+                        None,
+                    )
+                    if keyed_match is not None:
+                        display = replace(
+                            display,
+                            display_id=keyed_match.display_id,
+                            device_key=keyed_match.device_key,
+                        )
             replacement_ids = [
-                display_id
-                for display_id, registered in self._displays.items()
-                if display_id != display.display_id
-                and (
-                    display_id == display.previous_display_id
-                    or (
-                        display.device_key is not None
-                        and registered.device_key == display.device_key
-                    )
-                    or (
-                        display.device_key is not None
-                        and registered.device_key is None
-                        and registered.name == display.name
-                        and registered.model == display.model
-                        and registered.viewport_class == display.viewport_class
-                    )
-                    or (
-                        registered.name == display.name
-                        and registered.model == display.model
-                        and registered.viewport_class == display.viewport_class
-                    )
-                )
+                registered.display_id
+                for registered in matches
+                if registered.display_id != display.display_id
             ]
             remaining_displays = {
                 display_id: registered
@@ -366,14 +354,13 @@ class DashboardProfileStore:
             }
             if (
                 display.edition == "free"
-                and
-                display.display_id not in remaining_displays
+                and display.display_id not in remaining_displays
                 and len(remaining_displays) >= MAX_FREE_DISPLAYS
                 and not replacement_ids
             ):
                 raise ProfileValidationError(
-                    "Biofects Butler Free supports up to 2 devices; "
-                    "delete an existing display before adding another"
+                    "This app version supports up to 2 devices. "
+                    "Update Butler or delete an existing display before adding another."
                 )
             displays = {**remaining_displays, display.display_id: display}
             assignments = {
@@ -460,9 +447,9 @@ class DashboardProfileStore:
                 raise ProfileValidationError("display theme is unsupported")
             if (
                 theme == "biofects_hud"
-                and self._displays[display_id].edition != "paid"
+                and not self._displays[display_id].supports_aurora
             ):
-                raise ProfileValidationError("Biofects Aurora requires the Paid edition")
+                raise ProfileValidationError("Biofects Aurora requires a compatible Butler app")
             assignments = {**self._assignments, display_id: profile_id}
             display_themes = {
                 **self._display_themes,
@@ -490,6 +477,32 @@ class DashboardProfileStore:
                 "display_themes": dict(sorted(display_themes.items())),
             }
         )
+
+
+def _display_matches(
+    registered: Iterable[DisplayRegistration], incoming: DisplayRegistration
+) -> list[DisplayRegistration]:
+    displays = list(registered)
+    identified = [
+        display
+        for display in displays
+        if display.display_id in {incoming.display_id, incoming.previous_display_id}
+        or (incoming.device_key is not None and incoming.device_key == display.device_key)
+    ]
+    if identified:
+        return identified
+
+    # Legacy installs can report different device keys after a signing-key change.
+    # Two unified clients with different keys may be separate devices of the same model.
+    fingerprint_matches = [
+        display
+        for display in displays
+        if display.name == incoming.name
+        and display.model == incoming.model
+        and display.viewport_class == incoming.viewport_class
+        and (display.edition != "unified" or incoming.edition != "unified")
+    ]
+    return fingerprint_matches if len(fingerprint_matches) == 1 else []
 
 
 def _valid_display_id(value: Any) -> bool:
@@ -535,8 +548,8 @@ def parse_display_registration(payload: Mapping[str, Any]) -> DisplayRegistratio
     ) or not 1 <= renderer_schema_version <= DASHBOARD_PROFILE_SCHEMA_VERSION:
         raise ProfileValidationError("display renderer schema version is unsupported")
     edition = payload.get("edition", "free")
-    if edition not in DISPLAY_EDITIONS:
-        raise ProfileValidationError("display.edition must be free or paid")
+    if not isinstance(edition, str) or edition not in _DISPLAY_EDITION_PRIORITY:
+        raise ProfileValidationError("display.edition is unsupported")
     device_key = payload.get("device_key")
     if device_key is not None and not _valid_display_id(device_key):
         raise ProfileValidationError("display.device_key must be a lowercase ID")

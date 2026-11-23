@@ -245,7 +245,7 @@ def test_biofects_hud_requires_paid_display(store_module) -> None:
 
     with pytest.raises(
         store_module.ProfileValidationError,
-        match="requires the Paid edition",
+        match="requires a compatible Butler app",
     ):
         asyncio.run(store.async_assign("free-tablet", "default", "biofects_hud"))
 
@@ -313,7 +313,7 @@ def test_free_registration_rejects_third_device_but_allows_updates(store_module)
 
     with pytest.raises(
         store_module.ProfileValidationError,
-        match="Free supports up to 2 devices",
+        match="supports up to 2 devices",
     ):
         asyncio.run(store.async_register_display(registration("display-three", "Three")))
 
@@ -356,7 +356,7 @@ def test_registration_rejects_unknown_edition(store_module) -> None:
     """Only recognized app editions may affect registration policy."""
     with pytest.raises(
         store_module.ProfileValidationError,
-        match="edition must be free or paid",
+        match="edition is unsupported",
     ):
         store_module.parse_display_registration({
             "display_id": "display-one",
@@ -495,6 +495,69 @@ def test_paid_registration_wins_same_device_reregistration(store_module) -> None
     assert [display.display_id for display in store.displays] == [
         "android_paid_key"
     ]
+
+
+@pytest.mark.parametrize("legacy_edition", ["free", "paid"])
+def test_unified_registration_preserves_legacy_display(store_module, legacy_edition) -> None:
+    """An upgrade keeps the existing canonical ID, assignment, and theme."""
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(store.async_load())
+    profile = store_module.DEFAULT_PROFILE_PAYLOAD | {
+        "profile_id": "kitchen",
+        "name": "Kitchen",
+    }
+    asyncio.run(store.async_upsert(profile))
+    legacy = {
+        "display_id": "echo_legacy",
+        "device_key": "echo_legacy",
+        "edition": legacy_edition,
+        "name": "Amzn Echo Show 8",
+        "model": "Echo Show 8",
+        "viewport_class": "medium",
+        "renderer_schema_version": 1,
+    }
+    theme = "biofects_hud" if legacy_edition == "paid" else "holographic_interface"
+    asyncio.run(store.async_register_display(legacy))
+    asyncio.run(store.async_assign("echo_legacy", "kitchen", theme))
+
+    upgraded = asyncio.run(store.async_register_display(legacy | {
+        "display_id": "echo_unified",
+        "device_key": "echo_unified",
+        "edition": "unified",
+    }))
+    assert (upgraded.display_id, upgraded.edition) == ("echo_legacy", "unified")
+    assert store.assignments == {"echo_legacy": "kitchen"}
+    assert store.display_themes == {"echo_legacy": theme}
+
+    # An older APK can still connect and resolve the dashboard against the same ID.
+    assert asyncio.run(store.async_register_display(legacy)) == upgraded
+    assert store.displays == (upgraded,)
+
+
+def test_unified_displays_keep_assignments_after_reload(store_module) -> None:
+    """Each independently keyed unified display can use the full dashboard."""
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(store.async_load())
+    display = {
+        "edition": "unified",
+        "name": "Amzn Echo Show 8",
+        "model": "Echo Show 8",
+        "viewport_class": "medium",
+        "renderer_schema_version": 1,
+    }
+    keys = ["echo_first", "echo_second", "echo_third"]
+    for key in keys:
+        asyncio.run(store.async_register_display(
+            display | {"display_id": key, "device_key": key}
+        ))
+        asyncio.run(store.async_assign(key, "default", "biofects_hud"))
+
+    FakeStore.loaded = FakeStore.saved
+    reloaded = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(reloaded.async_load())
+    assert [display.display_id for display in reloaded.displays] == keys
+    assert reloaded.assignments == dict.fromkeys(keys, "default")
+    assert reloaded.display_themes == dict.fromkeys(keys, "biofects_hud")
 
 
 def test_first_keyed_registration_collapses_matching_legacy_records(store_module) -> None:
@@ -719,3 +782,34 @@ def test_load_does_not_rewrite_snapshot_with_future_profile(store_module) -> Non
     assert [profile.profile_id for profile in store.profiles] == ["default"]
     assert store.assignments == {}
     assert FakeStore.saved is None
+
+@pytest.mark.parametrize('theme', ['simpsons_homer','simpsons_marge','simpsons_bart','simpsons_lisa','simpsons_maggie'])
+def test_character_selection_is_display_specific_and_survives_reload(store_module, theme):
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(store.async_load())
+    asyncio.run(store.async_register_display({'display_id':'echo','name':'Echo','model':'Echo','viewport_class':'expanded','renderer_schema_version':1}))
+    before = store.get('default').as_dict()
+    asyncio.run(store.async_assign('echo','default',theme))
+    assert store.theme_for_display('echo') == theme
+    assert store.get('default').as_dict() == before
+    FakeStore.loaded = FakeStore.saved
+    restored = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(restored.async_load())
+    assert restored.theme_for_display('echo') == theme
+    assert restored.get('default').as_dict() == before
+
+
+@pytest.mark.parametrize('character', ['homer','marge','bart','lisa','maggie'])
+@pytest.mark.parametrize('background', ['house','kwik_e_mart'])
+def test_background_selection_survives_reload_without_layout_changes(store_module, character, background):
+    theme = f'simpsons_{character}__{background}'
+    store = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(store.async_load())
+    asyncio.run(store.async_register_display({'display_id':'echo','name':'Echo','model':'Echo','viewport_class':'expanded','renderer_schema_version':1}))
+    before = store.get('default').as_dict()
+    asyncio.run(store.async_assign('echo','default',theme))
+    FakeStore.loaded = FakeStore.saved
+    restored = store_module.DashboardProfileStore(SimpleNamespace())
+    asyncio.run(restored.async_load())
+    assert restored.theme_for_display('echo') == theme
+    assert restored.get('default').as_dict() == before

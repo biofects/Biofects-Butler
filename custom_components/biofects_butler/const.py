@@ -5,6 +5,7 @@ from typing import Final
 DOMAIN: Final = "biofects_butler"
 DEFAULT_ASSISTANT_NAME: Final = "Biofects Butler"
 CONF_ASSISTANT_NAME: Final = "assistant_name"
+CONF_CUSTOM_WAKE_WORD_URLS: Final = "custom_wake_word_urls"
 STATUS_API_VERSION: Final = 2
 DASHBOARD_PROFILE_SCHEMA_VERSION: Final = 1
 DASHBOARD_STORAGE_VERSION: Final = 1

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from copy import deepcopy
 
 import pytest
 
@@ -323,6 +324,63 @@ def test_binding_graph_type_round_trips() -> None:
     assert profile.as_dict()["screens"][0]["sections"][0]["bindings"][0]["role"] == "weather_source"
 
 
+def test_binding_lovelace_presentation_round_trips() -> None:
+    module = load_profiles_module()
+    payload = valid_profile()
+    binding = payload["screens"][0]["sections"][0]["bindings"][0]
+    binding["group"] = "Zone Controls"
+    binding["display_mode"] = "tile"
+
+    profile = module.parse_dashboard_profile(payload)
+    parsed = profile.screens[0].sections[0].bindings[0]
+
+    assert parsed.group == "Zone Controls"
+    assert parsed.display_mode == "tile"
+    assert profile.as_dict()["screens"][0]["sections"][0]["bindings"][0] == binding
+
+
+def test_call_service_source_id_round_trips() -> None:
+    module = load_profiles_module()
+    payload = valid_profile()
+    action = {
+        "gesture": "tap",
+        "type": "call_service",
+        "source_id": "switch.hose_timer",
+        "target_id": "automation.ac_cooler",
+        "domain": "automation",
+        "service": "trigger",
+        "data": {"skip_condition": True},
+    }
+    payload["screens"][0]["sections"][0]["actions"] = [action]
+
+    profile = module.parse_dashboard_profile(payload)
+    parsed = profile.screens[0].sections[0].actions[0]
+
+    assert parsed.source_id == "switch.hose_timer"
+    assert profile.as_dict()["screens"][0]["sections"][0]["actions"][0] == action
+
+
+def test_freeform_panel_and_card_presentation_round_trip() -> None:
+    module = load_profiles_module()
+    payload = valid_profile()
+    screen = deepcopy(payload["screens"][0])
+    screen.update({"screen_id": "lighting", "title": "Lighting"})
+    payload["screens"].append(screen)
+    screen["composition"] = "freeform_grid"
+    section = screen["sections"][0]
+    section.update({"slot": "panel_lighting", "type": "assistant", "column_span": 3, "row_span": 2})
+    binding = section["bindings"][0]
+    binding.update({"display_mode": "tile", "card_width": 2, "card_height": 2, "card_shape": "rounded"})
+
+    profile = module.parse_dashboard_profile(payload)
+    parsed_section = profile.screens[2].sections[0]
+    parsed_binding = parsed_section.bindings[0]
+
+    assert (parsed_section.column_span, parsed_section.row_span) == (3, 2)
+    assert (parsed_binding.card_width, parsed_binding.card_height, parsed_binding.card_shape) == (2, 2, "rounded")
+    assert profile.as_dict()["screens"][2] == screen
+
+
 def test_weather_forecast_type_round_trips() -> None:
     """Weather sections retain a supported forecast mode."""
     module = load_profiles_module()
@@ -522,7 +580,7 @@ def test_normalizes_existing_home_without_losing_card_data() -> None:
 
     home = profile.screens[0]
     reactor = home.sections[2]
-    assert home.title == "Home"
+    assert home.title == "My Dashboard"
     assert home.composition == "radial_command_overview"
     assert [section.slot for section in home.sections] == [
         "overview", "left_menu", "reactor", "right_menu", "media", "events"
@@ -696,3 +754,142 @@ def test_rejects_non_json_service_data() -> None:
 
     with pytest.raises(module.ProfileValidationError, match="JSON-compatible"):
         module.parse_dashboard_profile(payload)
+
+
+@pytest.mark.parametrize("layout", ["theme_default", "console", "orbital", "observatory", "wings", "companion"])
+def test_command_layout_round_trip(layout):
+    module = load_profiles_module()
+    payload = valid_profile()
+    payload["screens"][0]["command_layout"] = layout
+    profile = module.parse_dashboard_profile(payload)
+    assert profile.screens[0].command_layout == layout
+    assert module.parse_dashboard_profile(profile.as_dict()).screens[0].command_layout == layout
+
+
+def test_invalid_command_layout_rejected():
+    module = load_profiles_module()
+    payload = valid_profile()
+    payload["screens"][0]["command_layout"] = "unknown"
+    with pytest.raises(module.ProfileValidationError):
+        module.parse_dashboard_profile(payload)
+
+
+def test_advanced_grid_round_trip():
+    module = load_profiles_module()
+    payload = valid_profile()
+    screen = payload["screens"][0]
+    screen.update(composition="freeform_grid", grid_columns=12, grid_row_height=120, grid_gap=0)
+    screen["sections"] = [dict(section_id="hero", type="assistant", slot="panel_1", column_span=8, row_span=4, grid_column=5, grid_row=7)]
+    profile = module.parse_dashboard_profile(payload)
+    assert profile.as_dict()["screens"][0] == screen
+
+
+@pytest.mark.parametrize("field,value", [("grid_columns", 0), ("grid_columns", 13), ("grid_row_height", 79), ("grid_row_height", 401), ("grid_gap", -1), ("grid_gap", 33)])
+def test_grid_settings_reject_invalid_values(field, value):
+    module = load_profiles_module()
+    payload = valid_profile()
+    payload["screens"][0][field] = value
+    with pytest.raises(module.ProfileValidationError):
+        module.parse_dashboard_profile(payload)
+
+
+@pytest.mark.parametrize("field,value", [("column_span", 13), ("row_span", 9), ("grid_column", -1), ("grid_column", 13), ("grid_row", -1), ("grid_row", 41)])
+def test_grid_panels_reject_invalid_values(field, value):
+    module = load_profiles_module()
+    payload = valid_profile()
+    payload["screens"][0]["sections"][0][field] = value
+    with pytest.raises(module.ProfileValidationError):
+        module.parse_dashboard_profile(payload)
+
+
+@pytest.mark.parametrize("kind", ["heading", "text", "image"])
+def test_theme_elements_and_hidden_header_round_trip(kind):
+    module = load_profiles_module()
+    payload = valid_profile()
+    screen = payload["screens"][0]
+    screen.update(title="Our home", composition="freeform_grid", show_header=False)
+    screen["sections"] = [{"section_id":"custom", "type":kind, "slot":"custom", "title":"Family home", "secondary_title":"Welcome home", "default_image":"/local/logo.png", "bindings":[{"kind":"entity", "target_id":"input_text.home_greeting"}]}]
+    parsed = module.parse_dashboard_profile(payload)
+    assert parsed.as_dict()["screens"][0] == screen
+
+
+def test_custom_home_title_survives_command_center_normalization():
+    module = load_profiles_module()
+    payload = valid_profile()
+    payload["screens"][0]["title"] = "Our home"
+    assert module.parse_dashboard_profile(payload).as_dict()["screens"][0]["title"] == "Our home"
+
+
+def test_header_setting_rejects_string_booleans():
+    module = load_profiles_module()
+    payload = valid_profile()
+    payload["screens"][0]["show_header"] = "false"
+    with pytest.raises(module.ProfileValidationError):
+        module.parse_dashboard_profile(payload)
+
+
+def test_companion_theme_is_accepted() -> None:
+    module = load_profiles_module()
+    payload = valid_profile()
+    payload["theme"] = "companion"
+    assert module.parse_dashboard_profile(payload).theme == "companion"
+
+
+def test_butler_theme_is_accepted() -> None:
+    module = load_profiles_module()
+    payload = valid_profile()
+    payload["theme"] = "butler"
+    assert module.parse_dashboard_profile(payload).theme == "butler"
+
+
+@pytest.mark.parametrize('theme', ['simpsons_homer', 'simpsons_marge', 'simpsons_bart', 'simpsons_lisa', 'simpsons_maggie'])
+def test_simpsons_character_theme_preserves_profile_layout(theme):
+    module = load_profiles_module()
+    payload = valid_profile()
+    payload['theme'] = theme
+    payload['screens'][0]['command_layout'] = 'orbital'
+    profile = module.parse_dashboard_profile(payload)
+    assert profile.theme == theme
+    assert profile.screens[0].command_layout == 'orbital'
+    # Display themes are stored separately from the shared profile geometry.
+    assert module.parse_dashboard_profile(profile.as_dict()).screens[0].command_layout == 'orbital'
+
+
+def test_hal_theme_preserves_dashboard_layout() -> None:
+    module = load_profiles_module()
+    payload = valid_profile()
+    payload["theme"] = "hal_9000"
+    payload["screens"][0]["command_layout"] = "orbital"
+    profile = module.parse_dashboard_profile(payload)
+    restored = module.parse_dashboard_profile(profile.as_dict())
+    assert profile.theme == "hal_9000"
+    # Themes belong to display assignments, not serialized dashboard geometry.
+    assert "theme" not in profile.as_dict()
+    assert restored.screens[0].command_layout == "orbital"
+    assert restored.screens == profile.screens
+
+
+@pytest.mark.parametrize("theme", ["futurama_bender", "futurama_bender__planet_express", "futurama_bender__new_new_york", "futurama_bender__robot_bar"])
+def test_bender_backgrounds_preserve_layout(theme):
+    module = load_profiles_module()
+    payload = valid_profile()
+    payload["theme"] = theme
+    payload["screens"][0]["command_layout"] = "orbital"
+    profile = module.parse_dashboard_profile(payload)
+    assert profile.theme == theme
+    restored = module.parse_dashboard_profile(profile.as_dict())
+    assert restored.screens == profile.screens
+    assert restored.screens[0].command_layout == "orbital"
+
+
+@pytest.mark.parametrize("theme", ["pickle_rick", "pickle_rick__garage", "pickle_rick__portal_world", "pickle_rick__sewer_lab"])
+def test_pickle_rick_backgrounds_preserve_layout(theme):
+    module = load_profiles_module()
+    payload = valid_profile()
+    payload["theme"] = theme
+    payload["screens"][0]["command_layout"] = "orbital"
+    profile = module.parse_dashboard_profile(payload)
+    assert profile.theme == theme
+    restored = module.parse_dashboard_profile(profile.as_dict())
+    assert restored.screens == profile.screens
+    assert restored.screens[0].command_layout == "orbital"

@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlsplit
 
 import voluptuous as vol
+from homeassistant.helpers import selector
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
 
-from .const import DEFAULT_ASSISTANT_NAME, DOMAIN
+from .const import CONF_CUSTOM_WAKE_WORD_URLS, DEFAULT_ASSISTANT_NAME, DOMAIN
 from .setup_options import async_get_setup_options
 from .status import ButlerStatus, get_status
 
@@ -150,7 +152,7 @@ class BiofectsButlerConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class BiofectsButlerOptionsFlow(OptionsFlow):
-    """Allow changing the preferred backend from Butler options."""
+    """Allow changing Butler's backend and on-device wake word models."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -165,7 +167,23 @@ class BiofectsButlerOptionsFlow(OptionsFlow):
         if not choices:
             return self.async_abort(reason="no_configured_backends")
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            try:
+                model_urls = _parse_wake_word_urls(
+                    user_input.get(CONF_CUSTOM_WAKE_WORD_URLS, "")
+                )
+            except vol.Invalid:
+                return self.async_show_form(
+                    step_id="init",
+                    data_schema=self._options_schema(choices),
+                    errors={CONF_CUSTOM_WAKE_WORD_URLS: "invalid_wake_word_urls"},
+                )
+            return self.async_create_entry(
+                title="",
+                data={
+                    CONF_BACKEND: user_input[CONF_BACKEND],
+                    CONF_CUSTOM_WAKE_WORD_URLS: model_urls,
+                },
+            )
 
         default = self.config_entry.options.get(
             CONF_BACKEND,
@@ -174,11 +192,55 @@ class BiofectsButlerOptionsFlow(OptionsFlow):
         if default not in choices:
             default = next(iter(choices))
         return self.async_show_form(
-            step_id="init",
-            data_schema=vol.Schema(
-                {vol.Required(CONF_BACKEND, default=default): vol.In(choices)}
-            ),
+            step_id="init", data_schema=self._options_schema(choices, default)
         )
+
+    def _options_schema(self, choices: dict[str, str], default: str | None = None) -> vol.Schema:
+        """Build the options form schema, including server-managed local models."""
+        if default is None:
+            default = self.config_entry.options.get(
+                CONF_BACKEND,
+                self.config_entry.data.get(CONF_BACKEND, next(iter(choices))),
+            )
+        if default not in choices:
+            default = next(iter(choices))
+        urls = self.config_entry.options.get(CONF_CUSTOM_WAKE_WORD_URLS, [])
+        urls_default = "\n".join(urls) if isinstance(urls, list) else ""
+        return vol.Schema(
+            {
+                vol.Required(CONF_BACKEND, default=default): vol.In(choices),
+                vol.Optional(
+                    CONF_CUSTOM_WAKE_WORD_URLS,
+                    default=urls_default,
+                ): selector.TextSelector(
+                    selector.TextSelectorConfig(multiline=True)
+                ),
+            }
+        )
+
+
+def _parse_wake_word_urls(value: str) -> list[str]:
+    """Validate and normalize up to three direct microWakeWord manifest URLs."""
+    if len(value) > 4096:
+        raise vol.Invalid("Wake word model URL list is too long")
+    urls = list(dict.fromkeys(line.strip() for line in value.splitlines() if line.strip()))
+    if len(urls) > 3:
+        raise vol.Invalid("At most three custom wake word models can be configured")
+    for url in urls:
+        try:
+            parsed = urlsplit(url)
+            has_valid_origin = parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+        except ValueError:
+            has_valid_origin = False
+            parsed = None
+        if (
+            not has_valid_origin
+            or parsed is None
+            or parsed.username
+            or parsed.password
+        ):
+            raise vol.Invalid("Use direct http or https manifest URLs without embedded credentials")
+    return urls
 
 
 def _missing_components(status: ButlerStatus) -> list[str]:

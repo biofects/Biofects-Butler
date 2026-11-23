@@ -87,6 +87,11 @@ def config_flow_module(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setitem(sys.modules, "homeassistant.config_entries", config_entries)
     monkeypatch.setitem(sys.modules, "homeassistant.core", core)
     install_status_stubs(monkeypatch, components)
+    selector = ModuleType("homeassistant.helpers.selector")
+    selector.TextSelectorConfig = dict
+    selector.TextSelector = lambda config: str
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.selector", selector)
+    sys.modules["homeassistant.helpers"].selector = selector
     return importlib.import_module("custom_components.biofects_butler.config_flow")
 
 
