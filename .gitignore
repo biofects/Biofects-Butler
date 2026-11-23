@@ -4,3 +4,7 @@ __pycache__/
 *.py[cod]
 dist/
 .DS_Store
+
+# Local Piper model copies and their companion configs
+/piper-voices/*.onnx
+/piper-voices/*.onnx.json
