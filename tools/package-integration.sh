@@ -19,5 +19,5 @@ rm -f "$archive" "$archive.sha256"
     cd "$staging_dir"
     zip -qr "$archive" custom_components hacs.json
 )
-sha256sum "$archive" > "$archive.sha256"
+(cd "$output_dir" && sha256sum "$(basename "$archive")") > "$archive.sha256"
 printf '%s\n' "$archive"

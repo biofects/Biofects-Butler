@@ -10,7 +10,7 @@ Each voice has an ONNX model and a Piper JSON configuration. Keep the two files 
 | Jarvis | `en_GB-jarvis-medium` |
 | Rick | `en_US-RickSanchez-medium` |
 
-Copy the selected pair into your Piper service's voice data directory. Once the service exposes the voice to Home Assistant, Butler can list it in **Settings → Piper Voice** when it is available for the preferred Assist pipeline. These files are optional and sit outside the Home Assistant integration ZIP.
+Copy the selected pair into your Piper service's voice data directory. Assign the voice to a Home Assistant Assist pipeline, then select that pipeline in **Settings → Assist Profile**. **Home Assistant default** can also offer a Piper override for voices exposed by the preferred pipeline. These files are optional and sit outside the Home Assistant integration ZIP.
 
 This directory tracks the prompt files. ONNX models and their matching JSON configs are kept as local files. The model copies came from the project's Piper data directory, and their redistribution terms have yet to be documented.
 
